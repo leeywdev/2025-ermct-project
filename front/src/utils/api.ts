@@ -3,6 +3,20 @@ const API_BASE_URL =
     (import.meta as any).env?.VITE_API_BASE_URL) ||
   "http://localhost:8000";
 
+export class ApiError extends Error {
+  status: number;
+  body: string;
+  path: string;
+
+  constructor(path: string, status: number, body: string, statusText: string) {
+    super(`API ${path} failed (${status}): ${body || statusText}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+    this.path = path;
+  }
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
@@ -14,8 +28,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(
-      `API ${path} failed (${res.status}): ${text || res.statusText}`,
+    throw new ApiError(
+      path,
+      res.status,
+      text || "",
+      res.statusText,
     );
   }
 
@@ -90,6 +107,24 @@ export interface NearestRoutingRequest extends RoutingCandidateResponse {
   user_lon: number;
 }
 
+export interface RoutePathRequest {
+  start_lat: number;
+  start_lon: number;
+  end_lat: number;
+  end_lon: number;
+}
+
+export interface RoutePathPoint {
+  lat: number;
+  lon: number;
+}
+
+export interface RoutePathResponse {
+  path: RoutePathPoint[];
+  distance: number;
+  duration_sec: number;
+}
+
 export async function routeFromKTAS(
   payload: KtasRoutePayload,
 ): Promise<RoutingCandidateResponse> {
@@ -103,6 +138,12 @@ export async function routeNearest(
     "/api/ktas/route/seoul/nearest",
     payload,
   );
+}
+
+export async function routePath(
+  payload: RoutePathRequest,
+): Promise<RoutePathResponse> {
+  return postJson<RoutePathResponse>("/api/ktas/route/path", payload);
 }
 
 export async function predictAudio(formData: FormData): Promise<RoutingCandidateResponse> {

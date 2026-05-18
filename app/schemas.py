@@ -408,3 +408,21 @@ class RoutingCandidateResponse(BaseModel):
 class NearestRoutingRequest(RoutingCandidateResponse):
     user_lat: float
     user_lon: float
+
+
+class RoutePathRequest(BaseModel):
+    start_lat: float
+    start_lon: float
+    end_lat: float
+    end_lon: float
+
+
+class RoutePathPoint(BaseModel):
+    lat: float
+    lon: float
+
+
+class RoutePathResponse(BaseModel):
+    path: List[RoutePathPoint] = Field(default_factory=list)
+    distance: float = Field(..., description="총 거리(m)")
+    duration_sec: int = Field(..., description="총 이동 시간(초)")

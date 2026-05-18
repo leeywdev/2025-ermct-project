@@ -21,7 +21,8 @@ import {
   Trophy,
   Medal,
   X,
-  ChevronDown
+  ChevronDown,
+  MapPinned,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -35,14 +36,150 @@ import {
 import { Hospital, PatientData } from '../types';
 import { supabase } from '../utils/supabase/client';
 import {
+  ApiError,
   routeFromKTAS,
   routeNearest,
+  routePath,
   RoutingCandidateResponse,
   RoutingCandidateHospital,
   predictAudio,
   predictText,
 } from '../utils/api';
 import { useRef } from 'react';
+
+const TMAP_API_KEY = import.meta.env.VITE_TMAP_API_KEY || '';
+const KAKAO_MAP_APP_KEY =
+  import.meta.env.VITE_KAKAO_MAP_KEY || import.meta.env.VITE_KAKAO_MAP_APP_KEY || '';
+const TMAP_API_KEY_ERROR_MESSAGE = 'Tmap API 키가 설정되지 않았습니다.';
+const KAKAO_MAP_API_KEY_ERROR_MESSAGE = 'Kakao 지도 API 키가 설정되지 않았습니다.';
+
+type RouteSummary = {
+  distanceKm: number;
+  durationMin: number;
+};
+
+type RouteResult = {
+  path: Array<{ lat: number; lon: number }>;
+  summary: RouteSummary;
+};
+
+type RouteStatus = 'idle' | 'loading' | 'ready' | 'error';
+type MapCoordinate = { lat: number; lon: number };
+type MarkerEntry = {
+  lat: number;
+  lon: number;
+  title: string;
+  selected?: boolean;
+  current?: boolean;
+  rank?: number;
+};
+
+const DEFAULT_MAP_CENTER = { lat: 37.4200, lon: 127.1268 };
+const CURRENT_LOCATION_MARKER_SVG = encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34">
+    <circle cx="17" cy="17" r="13" fill="#2563EB" fill-opacity="0.18" />
+    <circle cx="17" cy="17" r="9" fill="#2563EB" stroke="#FFFFFF" stroke-width="3" />
+    <circle cx="17" cy="17" r="3" fill="#FFFFFF" />
+  </svg>
+`);
+
+function getRankColor(rank?: number) {
+  if (rank === 0) return '#EAB308';
+  if (rank === 1) return '#94A3B8';
+  if (rank === 2) return '#F97316';
+  return '#00796B';
+}
+
+function buildHospitalMarkerSvg(color: string, rank?: number, selected = false) {
+  const outerStroke = selected ? '#0F172A' : '#FFFFFF';
+  const shadowOpacity = selected ? '0.28' : '0.18';
+  const ringStroke = selected ? 3 : 2;
+  const rankLabel = rank != null && rank >= 0 ? String(rank + 1) : '';
+
+  return encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="48" viewBox="0 0 36 48">
+      <path d="M18 45C18 45 6 29.5 6 19C6 11.82 11.82 6 19 6C26.18 6 32 11.82 32 19C32 29.5 18 45 18 45Z"
+        fill="${color}" fill-opacity="${shadowOpacity}" />
+      <path d="M18 42C18 42 8 28.8 8 19.2C8 13.01 13.15 8 19.5 8C25.85 8 31 13.01 31 19.2C31 28.8 18 42 18 42Z"
+        fill="${color}" stroke="${outerStroke}" stroke-width="${ringStroke}" />
+      <circle cx="19.5" cy="19" r="6.5" fill="#FFFFFF" />
+      <text x="19.5" y="22.8" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="700" fill="${color}">${rankLabel}</text>
+    </svg>
+  `);
+}
+
+declare global {
+  interface Window {
+    kakao?: any;
+  }
+}
+
+function toFiniteCoordinate(value: unknown) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function normalizeCoordinate(
+  label: string,
+  latValue: unknown,
+  lonValue: unknown,
+): MapCoordinate | null {
+  const lat = toFiniteCoordinate(latValue);
+  const lon = toFiniteCoordinate(lonValue);
+
+  if (lat == null || lon == null) {
+    console.warn(`[Map] Invalid coordinate for ${label}`, { lat: latValue, lon: lonValue });
+    return null;
+  }
+
+  if (lat < 33 || lat > 39 || lon < 124 || lon > 132) {
+    console.warn(`[Map] Coordinate out of Korea bounds for ${label}`, { lat, lon });
+  }
+
+  return { lat, lon };
+}
+
+function formatMinutes(value?: number) {
+  if (value == null || Number.isNaN(value)) return '-';
+  if (value < 60) return `${value}분`;
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return minutes === 0 ? `${hours}시간` : `${hours}시간 ${minutes}분`;
+}
+
+
+function buildRoutePolylines(kakaoMaps: any, path: any[], color: string) {
+  const halo = new kakaoMaps.Polyline({
+    path,
+    strokeWeight: 10,
+    strokeColor: '#FFFFFF',
+    strokeOpacity: 0.95,
+    strokeStyle: 'solid',
+  });
+
+  const main = new kakaoMaps.Polyline({
+    path,
+    strokeWeight: 6,
+    strokeColor: color,
+    strokeOpacity: 0.98,
+    strokeStyle: 'solid',
+  });
+
+  return [halo, main];
+}
+
+function normalizePolylineCollection(value: any) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 interface ParamedicDashboardProps {
   userName: string;
@@ -80,12 +217,22 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const [locationRequested, setLocationRequested] = useState(false);
   const [awaitingLocation, setAwaitingLocation] = useState(false);
   const [openHospitalId, setOpenHospitalId] = useState<string | null>(null);
+  const [routeHospitalId, setRouteHospitalId] = useState<string | null>(null);
+  const [routeStatus, setRouteStatus] = useState<RouteStatus>('idle');
+  const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const recordTimeoutRef = useRef<number | null>(null);
   const locationFallbackTimeoutRef = useRef<number | null>(null);
   const nearestRequestInFlightRef = useRef(false);
   const lastNearestRequestKeyRef = useRef<string | null>(null);
+  const mapPanelRef = useRef<HTMLDivElement | null>(null);
+  const kakaoMapRef = useRef<any>(null);
+  const routePolylineRef = useRef<any[]>([]);
+  const markersRef = useRef<any[]>([]);
+  const routeCacheRef = useRef<Map<string, RouteResult>>(new Map());
+  const activeRouteRequestKeyRef = useRef<string | null>(null);
   const [patientInfo, setPatientInfo] = useState({
     name: '',
     birthdate: '',
@@ -143,6 +290,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const mapToHospital = useCallback((h: RoutingCandidateHospital): Hospital => ({
     id: h.id,
     name: h.name,
+    latitude: h.latitude,
+    longitude: h.longitude,
     availableBeds: h.total_effective_beds ?? 0,
     eta: h.duration_sec ? Math.max(1, Math.round(h.duration_sec / 60)) : undefined,
     distance: typeof h.distance === 'number' ? Number((h.distance / 1000).toFixed(1)) : undefined,
@@ -156,13 +305,24 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     address: h.address,
   }), []);
 
+  const selectedRouteHospital = hospitals.find((hospital) => hospital.id === routeHospitalId) ?? null;
+
+  const handleRouteHospitalChange = useCallback((hospital: Hospital) => {
+    setRouteHospitalId((prev) => (prev === hospital.id ? prev : hospital.id));
+  }, []);
+
   // Fetch backend recommendations (base)
-  const fetchBackendHospitals = useCallback(async (options?: { deferRender?: boolean }) => {
+  const fetchBackendHospitals = useCallback(async (options?: {
+    deferRender?: boolean;
+    coordinates?: { lat: number; lon: number } | null;
+  }) => {
     if (!patientData.ktasLevel || !patientData.symptoms.trim()) {
       setHospitals([]);
       setRoutingResponse(null);
       return;
     }
+
+    const coordinates = options?.coordinates ?? userLocation;
 
     setIsLoadingHospitals(true);
     try {
@@ -171,8 +331,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
         ktas_level: patientData.ktasLevel,
         chief_complaint: cc || patientData.symptoms,
         hospital_followup: patientData.existingHospital || undefined,
-        user_lat: userLocation?.lat,
-        user_lon: userLocation?.lon,
+        user_lat: coordinates?.lat,
+        user_lon: coordinates?.lon,
         min_valid_hospitals: 3,
       });
 
@@ -262,21 +422,25 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         clearLocationFallbackTimeout();
-        setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        const currentCoordinates = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+        };
+        setUserLocation(currentCoordinates);
         try {
           const base = await routeFromKTAS({
             ktas_level: patientData.ktasLevel ?? 0,
             chief_complaint: mapSymptomToChiefComplaintCode(patientData.symptoms) || patientData.symptoms,
             hospital_followup: patientData.existingHospital || undefined,
-            user_lat: pos.coords.latitude,
-            user_lon: pos.coords.longitude,
+            user_lat: currentCoordinates.lat,
+            user_lon: currentCoordinates.lon,
             min_valid_hospitals: 3,
           });
 
           const nearest = await refineRoutingWithNearest(
             base,
-            pos.coords.latitude,
-            pos.coords.longitude,
+            currentCoordinates.lat,
+            currentCoordinates.lon,
           );
           if (!nearest || !nearest.hospitals?.length) {
             setRoutingResponse(base);
@@ -284,7 +448,7 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
           }
         } catch (err) {
           console.warn('Geolocation fetch failed, falling back to base list', err);
-          await fetchBackendHospitals();
+          await fetchBackendHospitals({ coordinates: currentCoordinates });
         } finally {
           setIsLoadingHospitals(false);
           setAwaitingLocation(false);
@@ -522,6 +686,12 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
       ktasLevel: null
     });
     setSelectedHospital(null);
+    setOpenHospitalId(null);
+    setRouteHospitalId(null);
+    setRouteStatus('idle');
+    setRouteSummary(null);
+    setRouteError(null);
+    routeCacheRef.current.clear();
     setRequestStatus('waiting');
     setCurrentRequestId(null);
   };
@@ -532,6 +702,422 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
       locationFallbackTimeoutRef.current = null;
     }
   };
+
+  useEffect(() => {
+    if (!hospitals.length) {
+      setRouteHospitalId(null);
+      setRouteStatus('idle');
+      setRouteSummary(null);
+      setRouteError(null);
+      return;
+    }
+
+    setRouteHospitalId((prev) => {
+      if (prev && hospitals.some((hospital) => hospital.id === prev)) {
+        return prev;
+      }
+      return hospitals[0].id;
+    });
+  }, [hospitals]);
+
+  const ensureKakaoMap = useCallback(async () => {
+    if (!KAKAO_MAP_APP_KEY || !mapPanelRef.current) return null;
+
+    if (window.kakao?.maps) {
+      await new Promise<void>((resolve) => {
+        window.kakao.maps.load(() => resolve());
+      });
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const existingScript = document.querySelector<HTMLScriptElement>('script[data-kakao-map-sdk="true"]');
+        if (existingScript) {
+          existingScript.addEventListener('load', () => resolve(), { once: true });
+          existingScript.addEventListener('error', () => reject(new Error('Kakao Map SDK load failed')), { once: true });
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_MAP_APP_KEY}&autoload=false`;
+        script.async = true;
+        script.dataset.kakaoMapSdk = 'true';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Kakao Map SDK load failed'));
+        document.head.appendChild(script);
+      });
+
+      await new Promise<void>((resolve) => {
+        window.kakao.maps.load(() => resolve());
+      });
+    }
+
+    if (!kakaoMapRef.current && mapPanelRef.current) {
+      kakaoMapRef.current = new window.kakao.maps.Map(mapPanelRef.current, {
+        center: new window.kakao.maps.LatLng(DEFAULT_MAP_CENTER.lat, DEFAULT_MAP_CENTER.lon),
+        level: 6,
+      });
+    }
+
+    return kakaoMapRef.current;
+  }, []);
+
+  const syncKakaoMapLayout = useCallback(async (map: any) => {
+    if (!map || !mapPanelRef.current) return;
+
+    // The map lives inside an animated panel; wait for layout to settle before fitting bounds.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const rect = mapPanelRef.current.getBoundingClientRect();
+      console.log('[Map] Panel layout before relayout', {
+        attempt,
+        width: rect.width,
+        height: rect.height,
+      });
+
+      if (rect.width > 0 && rect.height > 0) {
+        map.relayout();
+        return;
+      }
+    }
+
+    console.warn('[Map] Panel height stayed at 0; forcing relayout with fallback size');
+    map.relayout();
+  }, []);
+
+  const fetchDrivingRoute = useCallback(async (
+    start: { lat: number; lon: number },
+    end: { lat: number; lon: number },
+  ) => {
+    if (!TMAP_API_KEY) {
+      throw new Error(TMAP_API_KEY_ERROR_MESSAGE);
+    }
+
+    const data = await routePath({
+      start_lat: start.lat,
+      start_lon: start.lon,
+      end_lat: end.lat,
+      end_lon: end.lon,
+    });
+
+    if (!Array.isArray(data.path) || !data.path.length) {
+      throw new Error('Tmap route data is incomplete');
+    }
+
+    const normalizedPath = data.path
+      .map((point, index) => normalizeCoordinate(`routePath[${index}]`, point.lat, point.lon))
+      .filter((point): point is MapCoordinate => point != null);
+
+    if (normalizedPath.length < 2) {
+      console.error('[Map] Route path is too short for polyline rendering', {
+        rawRoutePathLength: data.path.length,
+        normalizedRoutePathLength: normalizedPath.length,
+        firstRawPoint: data.path[0],
+        lastRawPoint: data.path[data.path.length - 1],
+      });
+      throw new Error('Tmap route path is invalid');
+    }
+
+    return {
+      path: normalizedPath,
+      summary: {
+        distanceKm: Number((Number(data.distance) / 1000).toFixed(1)),
+        durationMin: Math.max(1, Math.round(Number(data.duration_sec) / 60)),
+      },
+    } satisfies RouteResult;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const renderRouteMap = async () => {
+      if (!KAKAO_MAP_APP_KEY) {
+        setRouteStatus('idle');
+        setRouteSummary(null);
+        setRouteError(KAKAO_MAP_API_KEY_ERROR_MESSAGE);
+        return;
+      }
+
+      const map = await ensureKakaoMap();
+      if (!map || !window.kakao?.maps || cancelled) return;
+      await syncKakaoMapLayout(map);
+
+      markersRef.current.forEach((marker) => marker.setMap(null));
+      markersRef.current = [];
+
+      normalizePolylineCollection(routePolylineRef.current).forEach((polyline) => polyline.setMap(null));
+      routePolylineRef.current = [];
+
+      const bounds = new window.kakao.maps.LatLngBounds();
+      let hasBounds = false;
+      const setFallbackView = () => {
+        map.relayout();
+        map.setCenter(new window.kakao.maps.LatLng(DEFAULT_MAP_CENTER.lat, DEFAULT_MAP_CENTER.lon));
+        map.setLevel(7);
+      };
+      const extendBounds = (coordinate: MapCoordinate | MarkerEntry | null) => {
+        if (!coordinate) return null;
+        const latLng = new window.kakao.maps.LatLng(coordinate.lat, coordinate.lon);
+        bounds.extend(latLng);
+        hasBounds = true;
+        return latLng;
+      };
+      const markerEntries: MarkerEntry[] = [];
+
+      const origin = userLocation
+        ? normalizeCoordinate('origin', userLocation.lat, userLocation.lon)
+        : null;
+
+      if (origin) {
+        markerEntries.push({
+          lat: origin.lat,
+          lon: origin.lon,
+          title: '현재 위치',
+          current: true,
+        });
+      }
+
+      hospitals.forEach((hospital) => {
+        const hospitalRank = hospitals.findIndex((item) => item.id === hospital.id);
+        const coordinate = normalizeCoordinate(
+          `hospital:${hospital.id}`,
+          hospital.latitude,
+          hospital.longitude,
+        );
+
+        if (!coordinate) {
+          return;
+        }
+
+        markerEntries.push({
+          lat: coordinate.lat,
+          lon: coordinate.lon,
+          title: hospital.name,
+          selected: hospital.id === routeHospitalId,
+          rank: hospitalRank,
+        });
+      });
+
+      markersRef.current = markerEntries.map((entry) => {
+        const position = extendBounds(entry);
+        const image = entry.current
+          ? new window.kakao.maps.MarkerImage(
+              `data:image/svg+xml;charset=UTF-8,${CURRENT_LOCATION_MARKER_SVG}`,
+              new window.kakao.maps.Size(34, 34),
+              {
+                offset: new window.kakao.maps.Point(17, 17),
+              },
+            )
+          : new window.kakao.maps.MarkerImage(
+              `data:image/svg+xml;charset=UTF-8,${buildHospitalMarkerSvg(
+                getRankColor(entry.rank),
+                entry.rank,
+                !!entry.selected,
+              )}`,
+              new window.kakao.maps.Size(36, 48),
+              {
+                offset: new window.kakao.maps.Point(18, 46),
+              },
+            );
+        const marker = new window.kakao.maps.Marker({
+          position,
+          title: entry.title,
+          image,
+        });
+
+        if (entry.current) {
+          marker.setZIndex(10);
+        } else if (entry.selected) {
+          marker.setZIndex(8);
+        }
+
+        marker.setMap(map);
+        return marker;
+      });
+
+      const selectedHospital = hospitals.find((hospital) => hospital.id === routeHospitalId) ?? null;
+      const selectedHospitalRank = selectedHospital
+        ? hospitals.findIndex((hospital) => hospital.id === selectedHospital.id)
+        : -1;
+      const selectedRouteColor = getRankColor(selectedHospitalRank);
+      const selectedHospitalCoordinate = selectedHospital
+        ? normalizeCoordinate(
+            `selectedHospital:${selectedHospital.id}`,
+            selectedHospital.latitude,
+            selectedHospital.longitude,
+          )
+        : null;
+      if (!selectedHospital || !userLocation) {
+        setRouteStatus('idle');
+        setRouteSummary(null);
+        setRouteError(null);
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        return;
+      }
+
+      if (!origin || !selectedHospitalCoordinate) {
+        console.warn('[Map] Invalid route endpoints', {
+          origin,
+          selectedHospital,
+          selectedHospitalCoordinate,
+        });
+        setRouteStatus('error');
+        setRouteSummary(null);
+        setRouteError('지도 좌표가 올바르지 않습니다.');
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        return;
+      }
+
+      const routeKey = `${origin.lat.toFixed(5)}:${origin.lon.toFixed(5)}:${selectedHospital.id}`;
+      activeRouteRequestKeyRef.current = routeKey;
+
+      if (!TMAP_API_KEY) {
+        console.error(
+          '[Tmap] Missing VITE_TMAP_API_KEY. Add it to front/.env and restart the Vite dev server.',
+        );
+        setRouteStatus('error');
+        setRouteSummary(null);
+        setRouteError(TMAP_API_KEY_ERROR_MESSAGE);
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        return;
+      }
+
+      const cachedRoute = routeCacheRef.current.get(routeKey);
+      if (cachedRoute) {
+        if (cancelled || activeRouteRequestKeyRef.current !== routeKey) return;
+
+        const cachedLatLngPath = cachedRoute.path.map(
+          (point) => new window.kakao.maps.LatLng(point.lat, point.lon),
+        );
+        console.log({
+          origin,
+          selectedHospital: selectedHospitalCoordinate,
+          routePathLength: cachedRoute.path.length,
+          firstRoutePoint: cachedRoute.path[0],
+          lastRoutePoint: cachedRoute.path[cachedRoute.path.length - 1],
+          allRoutePointsAreLatLng: cachedLatLngPath.every(
+            (point) => point instanceof window.kakao.maps.LatLng,
+          ),
+        });
+
+        routePolylineRef.current = buildRoutePolylines(
+          window.kakao.maps,
+          cachedLatLngPath,
+          selectedRouteColor,
+        );
+        normalizePolylineCollection(routePolylineRef.current).forEach((polyline) => polyline.setMap(map));
+        extendBounds(origin);
+        extendBounds(selectedHospitalCoordinate);
+        cachedRoute.path.forEach((point) => {
+          extendBounds(point);
+        });
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        setRouteStatus('ready');
+        setRouteSummary(cachedRoute.summary);
+        setRouteError(null);
+        return;
+      }
+
+      setRouteStatus('loading');
+      setRouteSummary(null);
+      setRouteError(null);
+
+      try {
+        const route = await fetchDrivingRoute(
+          { lat: origin.lat, lon: origin.lon },
+          { lat: selectedHospitalCoordinate.lat, lon: selectedHospitalCoordinate.lon },
+        );
+
+        if (cancelled || activeRouteRequestKeyRef.current !== routeKey) return;
+
+        routeCacheRef.current.set(routeKey, route);
+        const routeLatLngPath = route.path.map(
+          (point) => new window.kakao.maps.LatLng(point.lat, point.lon),
+        );
+        console.log({
+          origin,
+          selectedHospital: selectedHospitalCoordinate,
+          routePathLength: route.path.length,
+          firstRoutePoint: route.path[0],
+          lastRoutePoint: route.path[route.path.length - 1],
+          allRoutePointsAreLatLng: routeLatLngPath.every(
+            (point) => point instanceof window.kakao.maps.LatLng,
+          ),
+        });
+        routePolylineRef.current = buildRoutePolylines(
+          window.kakao.maps,
+          routeLatLngPath,
+          selectedRouteColor,
+        );
+        normalizePolylineCollection(routePolylineRef.current).forEach((polyline) => polyline.setMap(map));
+        extendBounds(origin);
+        extendBounds(selectedHospitalCoordinate);
+        route.path.forEach((point) => {
+          extendBounds(point);
+        });
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        setRouteStatus('ready');
+        setRouteSummary(route.summary);
+        setRouteError(null);
+      } catch (error) {
+        if (cancelled || activeRouteRequestKeyRef.current !== routeKey) return;
+        if (error instanceof ApiError) {
+          console.error('Tmap route API request failed', {
+            path: error.path,
+            statusCode: error.status,
+            responseBody: error.body,
+          });
+        } else {
+          console.error('Error fetching Tmap route:', error);
+        }
+        if (hasBounds) {
+          map.relayout();
+          map.setBounds(bounds, 48, 48, 48, 48);
+        } else {
+          setFallbackView();
+        }
+        setRouteStatus('error');
+        setRouteSummary(null);
+        setRouteError('경로 정보를 불러오지 못했습니다');
+      }
+    };
+
+    renderRouteMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureKakaoMap, fetchDrivingRoute, hospitals, routeHospitalId, syncKakaoMapLayout, userLocation]);
+
+  useEffect(() => {
+    return () => {
+      markersRef.current.forEach((marker) => marker.setMap(null));
+      normalizePolylineCollection(routePolylineRef.current).forEach((polyline) => polyline.setMap(null));
+    };
+  }, []);
 
   const tone = getToneByLevel(patientData.ktasLevel);
 
@@ -975,16 +1561,85 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                 </div>
               ) : (
                 <div className="space-y-4">
+                    <ModernCard className="overflow-hidden border border-gray-200 bg-white/95 p-0 shadow-md">
+                      <div className="border-b border-gray-100 px-4 py-4 sm:px-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <MapPinned size={18} className="text-[#00796B]" />
+                              <h3 className="text-base font-black text-gray-900">이송 경로 안내</h3>
+                            </div>
+                            <p className="mt-1 text-sm font-semibold text-gray-700">
+                              {selectedRouteHospital ? `현재 위치 → ${selectedRouteHospital.name}` : '선택된 병원이 없습니다'}
+                            </p>
+                          </div>
+                          <div className="rounded-full bg-[#00796B]/10 px-3 py-1 text-[11px] font-bold text-[#00796B]">
+                            {routeStatus === 'loading' ? '경로 계산 중' : routeStatus === 'ready' ? '경로 표시 중' : '지도 보기'}
+                          </div>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                            <p className="text-[11px] font-bold text-gray-500">예상 시간</p>
+                            <p className="mt-1 text-lg font-black text-[#00796B]">
+                              {routeSummary ? formatMinutes(routeSummary.durationMin) : selectedRouteHospital?.eta != null ? formatMinutes(selectedRouteHospital.eta) : '-'}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                            <p className="text-[11px] font-bold text-gray-500">거리</p>
+                            <p className="mt-1 text-lg font-black text-[#00796B]">
+                              {routeSummary ? `${routeSummary.distanceKm}km` : selectedRouteHospital?.distance != null ? `${selectedRouteHospital.distance}km` : '-'}
+                            </p>
+                          </div>
+                          <div className="col-span-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 sm:col-span-1">
+                            <p className="text-[11px] font-bold text-gray-500">경로 상태</p>
+                            <p className="mt-1 text-sm font-bold text-gray-800">
+                              {!userLocation
+                                ? '현재 위치 확인 후 경로를 계산합니다'
+                                : routeError
+                                  ? routeError
+                                  : routeStatus === 'loading'
+                                    ? 'Tmap 경로를 계산하고 있습니다'
+                                    : routeStatus === 'ready'
+                                      ? 'Kakao 지도에 경로를 표시했습니다'
+                                      : '병원을 선택하면 경로를 보여줍니다'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <div
+                          ref={mapPanelRef}
+                          className="h-[280px] w-full bg-slate-100 sm:h-[300px]"
+                          style={{ minHeight: 280 }}
+                        />
+                        {!KAKAO_MAP_APP_KEY && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-slate-100/90 px-6 text-center text-sm font-semibold text-gray-600">
+                            {KAKAO_MAP_API_KEY_ERROR_MESSAGE}
+                          </div>
+                        )}
+                        {KAKAO_MAP_APP_KEY && !!routeError && (
+                          <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-center text-sm font-semibold text-red-700 shadow-sm">
+                            {routeError}
+                          </div>
+                        )}
+                        {KAKAO_MAP_APP_KEY && hospitals.length > 0 && (
+                          <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold text-gray-700 shadow-sm">
+                            현재 위치 + 추천 병원 {hospitals.length}곳
+                          </div>
+                        )}
+                      </div>
+                    </ModernCard>
                     {hospitals.map((hospital, idx) => (
                     <ModernCard 
                         key={hospital.id} 
-                        // Make the entire card clickable
-                        onClick={() => handleHospitalSelect(hospital)}
+                        onClick={() => handleRouteHospitalChange(hospital)}
                         className={cn(
                             "group active:scale-[0.98] transition-all relative overflow-hidden border-2 cursor-pointer shadow-md hover:shadow-xl",
-                            idx === 0 ? "border-yellow-400 bg-yellow-50/50" :
-                            idx === 1 ? "border-slate-300 bg-slate-50/50" :
-                            "border-orange-200 bg-orange-50/50"
+                            routeHospitalId === hospital.id
+                              ? "border-[#00796B] bg-[#E8F6F4] ring-2 ring-[#00796B]"
+                              : idx === 0 ? "border-yellow-400 bg-yellow-50/50" :
+                              idx === 1 ? "border-slate-300 bg-slate-50/50" :
+                              "border-orange-200 bg-orange-50/50"
                         )}
                     >
                         <div className="flex justify-between items-start gap-3 mb-4">
@@ -1025,7 +1680,22 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                 커버리지 {hospital.acceptanceRate ?? '--'}%
                               </div>
                               <button
+                                className={cn(
+                                  "rounded-full border px-3 py-1 text-[11px] font-bold transition-colors",
+                                  routeHospitalId === hospital.id
+                                    ? "border-[#00796B] bg-[#00796B] text-white"
+                                    : "border-[#00796B]/20 bg-white text-[#00796B] hover:bg-[#00796B]/5"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRouteHospitalChange(hospital);
+                                }}
+                              >
+                                경로 보기
+                              </button>
+                              <button
                                 className="flex items-center gap-1 text-xs font-bold text-[#00796B] hover:text-[#005f56]"
+                                aria-expanded={openHospitalId === hospital.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setOpenHospitalId((prev) => prev === hospital.id ? null : hospital.id);
@@ -1034,10 +1704,10 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                 상세 보기
                                 <ChevronDown
                                   size={14}
-                                  className={cn(
-                                    "transition-transform",
-                                    openHospitalId === hospital.id ? "rotate-180" : ""
-                                  )}
+                                  className="transition-transform duration-200"
+                                  style={{
+                                    transform: openHospitalId === hospital.id ? 'rotate(180deg)' : 'rotate(0deg)',
+                                  }}
                                 />
                               </button>
                           </div>
@@ -1099,13 +1769,19 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                 <Phone size={32} fill="currentColor" />
                             </button>
 
-                            {/* Request Button (Visual only since card is clickable, but helpful affordance) */}
-                            <div className="flex-1 h-16 bg-blue-600 rounded-2xl flex items-center justify-between px-6 text-white shadow-lg border-2 border-blue-700 group-active:bg-blue-700 transition-colors">
+                            <button
+                                type="button"
+                                className="flex-1 h-16 bg-blue-600 rounded-2xl flex items-center justify-between px-6 text-white shadow-lg border-2 border-blue-700 group-active:bg-blue-700 transition-colors"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleHospitalSelect(hospital);
+                                }}
+                            >
                                 <span className="text-xl font-black">수송 요청 보내기</span>
                                 <div className="bg-white/20 p-2 rounded-full">
                                     <ChevronRight size={24} className="group-hover:translate-x-1 transition-transform" />
                                 </div>
-                            </div>
+                            </button>
                         </div>
                     </ModernCard>
                     ))}

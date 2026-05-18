@@ -41,6 +41,9 @@ from app.schemas import (
     KTASRoutingRequest,
     RoutingCandidateResponse,
     NearestRoutingRequest,
+    RoutePathRequest,
+    RoutePathResponse,
+    RoutePathPoint,
 )
 from app.triage_utils import (
     procedure_status_for_hospital,
@@ -66,7 +69,7 @@ class TextKTASRequest(BaseModel):
     text: str
 
 # 3단계 import
-from .distance_logic import calculate_all_distances_async, get_top3
+from .distance_logic import calculate_all_distances_async, get_top3, get_tmap_route_async
 
 SERIOUS_MKIOSK_KEYS = [f"MKioskTy{i}" for i in range(1, 28)]  # 1 ~ 27
 
@@ -1833,6 +1836,28 @@ async def route_seoul_nearest(
         user_lat=req.user_lat,
         user_lon=req.user_lon,
         hospitals=top3_hospitals,
+    )
+
+
+@app.post(
+    "/api/ktas/route/path",
+    response_model=RoutePathResponse,
+)
+async def get_route_path(req: RoutePathRequest = Body(...)):
+    route = await get_tmap_route_async(
+        start_lat=req.start_lat,
+        start_lon=req.start_lon,
+        end_lat=req.end_lat,
+        end_lon=req.end_lon,
+    )
+
+    if not route:
+        raise HTTPException(status_code=502, detail="Tmap route calculation failed")
+
+    return RoutePathResponse(
+        path=[RoutePathPoint(**point) for point in route["path"]],
+        distance=float(route["distance"]),
+        duration_sec=int(route["duration_sec"]),
     )
 
 

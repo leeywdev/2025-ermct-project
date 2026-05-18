@@ -14,6 +14,8 @@ export interface PatientData {
 export interface Hospital {
   id: string;
   name: string;
+  latitude: number;
+  longitude: number;
   availableBeds: number;
   eta?: number;
   distance?: number;
