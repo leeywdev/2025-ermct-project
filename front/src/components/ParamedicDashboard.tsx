@@ -536,7 +536,7 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const tone = getToneByLevel(patientData.ktasLevel);
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#F5F7FA] max-w-md mx-auto relative shadow-2xl overflow-hidden font-sans text-slate-800">
+    <div className="emt-app-shell relative flex min-h-screen flex-col overflow-hidden bg-[#F5F7FA] font-sans text-slate-800 shadow-2xl">
       
       {/* Header */}
       <header className="bg-white border-b border-gray-100 p-4 sticky top-0 z-20 flex items-center justify-between">
@@ -555,14 +555,14 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden">
+      <main className="relative flex flex-1 flex-col overflow-hidden">
         <AnimatePresence mode="wait">
           
           {/* VIEW: INPUT */}
           {view === 'input' && (
             <motion.div 
               key="input" 
-              className="flex-1 overflow-y-auto p-5 pb-24 relative"
+              className="relative flex-1 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-10"
               initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }}
             >
               {/* 1. LISTENING POPUP */}
@@ -628,14 +628,17 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                 )}
               </AnimatePresence>
 
+              <div className="emt-page-container mt-6">
+                <div className="emt-input-grid">
+                  <div className="emt-area-patient">
               {/* NEW: KTAS Live Status Display */}
               {/* Patient Basic Info */}
-              <div className="mt-6 mb-4">
+              <div className="mb-4 md:mb-0">
                 <ModernCard className="space-y-4 border-2 border-gray-200">
                   <div className="flex items-center gap-2 text-sm font-bold text-gray-500 uppercase tracking-widest">
                     <Activity size={16} /> 환자 기본 정보
                   </div>
-                  <div className="space-y-6">
+                  <div className="grid gap-5 md:grid-cols-2">
                     <div className="space-y-3">
                       <p className="text-sm font-bold text-gray-500">환자 이름</p>
                       <ModernInput
@@ -679,15 +682,16 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                   </div>
                 </ModernCard>
               </div>
+                  </div>
 
               {/* Voice Input Button + Stop */}
-              <div className="mb-6 flex flex-col gap-3">
+              <div className="emt-area-voice flex flex-col gap-3">
                  <ModernButton 
                     variant="voice" 
                     size="full" 
                     onClick={handleVoiceInput}
                     disabled={isListening || isProcessingVoice}
-                    className="flex items-center justify-center gap-3 shadow-lg shadow-indigo-200 py-6"
+                    className="flex items-center justify-center gap-3 py-6 shadow-lg shadow-indigo-200 md:min-h-[88px]"
                  >
                     <Mic size={28} />
                     <span className="font-black text-xl">음성으로 입력하기</span>
@@ -697,20 +701,20 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                     size="full"
                     onClick={stopVoiceRecording}
                     disabled={!isListening}
-                    className="flex items-center justify-center gap-2"
+                    className="flex items-center justify-center gap-2 rounded-[28px] border border-gray-200 bg-white py-5 shadow-sm md:min-h-[84px]"
                  >
                     <span className="font-bold">{isListening ? '녹음 중지' : '녹음 대기 중'}</span>
                  </ModernButton>
               </div>
 
-              <div className="space-y-6">
+                  <div className="emt-area-vitals">
                 {/* Vitals Section */}
                 <section>
                     <h3 className="text-lg font-black text-gray-800 uppercase tracking-tight mb-3 ml-1 flex items-center gap-2">
                         <Activity className="text-red-500" size={20} /> Vitals & Consciousness
                     </h3>
-                    <ModernCard className="space-y-6">
-                        <div className="grid grid-cols-2 gap-5">
+                    <ModernCard className="space-y-5 md:space-y-4">
+                        <div className="grid grid-cols-2 gap-5 md:gap-4">
                             <div className="col-span-2">
                                 <label className="flex items-center gap-2 text-lg font-bold text-gray-600 mb-2">
                                     <Brain size={20} className="text-[#00796B]" /> 의식상태 (AVPU)
@@ -727,8 +731,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                 </ModernSelect>
                             </div>
                             
-                            <div>
-                                <label className="flex items-center gap-2 text-lg font-bold text-gray-600 mb-2">
+                            <div className="col-span-2 md:col-span-1">
+                                <label className="mb-2 flex items-center gap-2 text-lg font-bold text-gray-600">
                                     <Activity size={20} className="text-[#00796B]" /> 혈압
                                 </label>
                                 <ModernInput 
@@ -738,8 +742,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                     className="text-center font-mono !text-2xl !font-black !h-16 tracking-wider"
                                 />
                             </div>
-                            <div>
-                                <label className="flex items-center gap-2 text-lg font-bold text-gray-600 mb-2">
+                            <div className="col-span-2 md:col-span-1">
+                                <label className="mb-2 flex items-center gap-2 text-lg font-bold text-gray-600">
                                     <Heart size={20} className="text-[#00796B]" /> 맥박
                                 </label>
                                 <ModernInput 
@@ -750,8 +754,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                     className="text-center font-mono !text-2xl !font-black !h-16"
                                 />
                             </div>
-                            <div>
-                                <label className="flex items-center gap-2 text-lg font-bold text-gray-600 mb-2">
+                            <div className="col-span-2 md:col-span-1">
+                                <label className="mb-2 flex items-center gap-2 text-lg font-bold text-gray-600">
                                     <Wind size={20} className="text-[#00796B]" /> 호흡
                                 </label>
                                 <ModernInput 
@@ -762,8 +766,8 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                                     className="text-center font-mono !text-2xl !font-black !h-16"
                                 />
                             </div>
-                            <div>
-                                <label className="flex items-center gap-2 text-lg font-bold text-gray-600 mb-2">
+                            <div className="col-span-2 md:col-span-1">
+                                <label className="mb-2 flex items-center gap-2 text-lg font-bold text-gray-600">
                                     <Thermometer size={20} className="text-[#00796B]" /> 체온
                                 </label>
                                 <ModernInput 
@@ -777,7 +781,9 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                         </div>
                     </ModernCard>
                 </section>
+                  </div>
 
+                  <div className="emt-area-medical">
                 {/* Symptoms & History */}
                 <section>
                     <h3 className="text-lg font-black text-gray-800 uppercase tracking-tight mb-3 ml-1 flex items-center gap-2">
@@ -807,11 +813,13 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                         </div>
                     </ModernCard>
                 </section>
+                  </div>
+                </div>
               </div>
 
               {/* Bottom Action */}
-              <div className="fixed bottom-0 left-0 right-0 p-5 bg-white border-t border-gray-100 safe-area-bottom shadow-[0_-4px_20px_rgba(0,0,0,0.05)] z-10">
-                 <div className="max-w-md mx-auto flex items-center gap-4">
+              <div className="fixed bottom-0 left-0 right-0 z-10 border-t border-gray-100 bg-white p-5 safe-area-bottom shadow-[0_-4px_20px_rgba(0,0,0,0.05)] md:sticky md:mt-8 md:border-t-0 md:bg-transparent md:p-0 md:shadow-none">
+                 <div className="mx-auto flex w-full max-w-[760px] items-center gap-4 md:max-w-5xl">
                     <ModernButton
                       onClick={async () => {
                         // 텍스트 입력 기반으로 백엔드 KTAS/바이탈도 받아오기
@@ -833,7 +841,7 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                           setView('review');
                         }
                       }}
-                      className="flex-1 shadow-lg shadow-teal-200 h-16 text-2xl"
+                      className="h-16 flex-1 text-2xl shadow-lg shadow-teal-200"
                       size="lg"
                     >
                         KTAS 확인 후 추천

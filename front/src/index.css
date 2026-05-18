@@ -2467,3 +2467,70 @@ html {
     transform: none;
   }
 }
+
+.emt-app-shell {
+  width: 100%;
+  max-width: 448px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.emt-page-container {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.emt-input-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "patient"
+    "voice"
+    "vitals"
+    "medical";
+}
+
+.emt-area-patient {
+  grid-area: patient;
+}
+
+.emt-area-voice {
+  grid-area: voice;
+}
+
+.emt-area-vitals {
+  grid-area: vitals;
+}
+
+.emt-area-medical {
+  grid-area: medical;
+}
+
+@media (min-width: 768px) {
+  .emt-app-shell {
+    max-width: 1040px;
+  }
+
+  .emt-page-container {
+    max-width: 1040px;
+  }
+
+  .emt-input-grid {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    grid-template-areas:
+      "patient vitals"
+      "medical vitals"
+      "medical voice";
+    align-items: start;
+  }
+}
+
+@media (min-width: 1180px) {
+  .emt-app-shell,
+  .emt-page-container {
+    max-width: 1120px;
+  }
+}
