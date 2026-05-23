@@ -719,6 +719,7 @@ def parse_background_v3(text: str) -> dict:
 
     if "임신" in text:
         B["pregnant"] = True
+
     if "수술" in text:
         B["recent_surgery"] = True
 
@@ -793,7 +794,7 @@ def parse_situation_v3(text: str) -> dict:
     }
 
     # -------------------------
-    # 🔥 ① 명시적 주호소 인식 (최우선)
+    # ① 명시적 주호소 인식 (최우선)
     # -------------------------
     explicit_cc_patterns = [
         r"(주호소|주호|주된\s*증상|주된\s*호소|주\s*증상|주된\s*문제|가장\s*불편한\s*곳|가장\s*아픈\s*곳)[은는]?\s*([가-힣A-Za-z0-9\s]+)",
@@ -803,6 +804,7 @@ def parse_situation_v3(text: str) -> dict:
 
     explicit_cc_raw = None
 
+    # 명시적 주호소 패턴을 순서대로 시도하여 가장 먼저 매칭되는 구간을 추출
     for ep in explicit_cc_patterns:
         m = re.search(ep, t)
         if m:
@@ -829,12 +831,11 @@ def parse_situation_v3(text: str) -> dict:
                 break
 
     # ------------------------- 사고기전(Mechanism) -------------------------
-    # ★ 위에서 리턴하지 않았으므로 이제 정상적으로 실행됨
     if match_any(PATTERNS["mechanism"], t):
         S["mechanism"] = True
 
     # -------------------------
-    # 🔥 병원 단어 + 부정표현 → followup 강제 없음
+    # 병원 단어 + 부정표현 → followup 강제 없음
     # -------------------------
     hospital_none_patterns = [
         r"병원.{0,20}(안\s*다니|안\s*다녀|안\s*다녔|다닌\s*곳\s*없|다니는\s*곳\s*없|따로\s*없|없[어요습니다]*)",
@@ -857,7 +858,7 @@ def parse_situation_v3(text: str) -> dict:
     # 병원 없음이 명확히 감지되면 병원 파싱 전체 스킵
     if not hospital_forced_none:
         # -------------------------
-        # 🔽 기존 병원 파싱 로직
+        # 기존 병원 파싱 로직
         # -------------------------
         followup_raw = None
 
