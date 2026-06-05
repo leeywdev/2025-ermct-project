@@ -1,9 +1,19 @@
 import json
-from typing import Any, Dict, List, Optional, Tuple
+import os
+from typing import Any, Dict, Tuple
+from dotenv import load_dotenv
+from openai import OpenAI
 
-from app.ktas_rag import KtasVectorStore, classify_ktas_rag
-from app.openai_client import get_openai_client
+load_dotenv()
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+
+def get_openai_client() -> OpenAI:
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file.")
+    return client
 # =====================================================
 # 1. 기본 SBAR 템플릿
 # =====================================================
@@ -418,51 +428,24 @@ def classify_ktas(sbar: dict) -> dict:
 def run_ktas_engine(
     clean_text: str,
     raw_hospital=None,
-    final_hospital=None,
-    use_rag: bool = False,
-    rag_vector_store: Optional[KtasVectorStore] = None,
+    final_hospital=None
 ) -> Dict[str, Any]:
     llm_output = call_llm2_for_sbar(clean_text)
     sbar = parse_sbar_json(llm_output)
 
-    ktas_options: Optional[List[Dict[str, Any]]] = None
-    if rag_vector_store is not None:
-        use_rag = True
-
-    if use_rag:
-        if rag_vector_store is None:
-            raise ValueError("use_rag=True일 때는 rag_vector_store를 전달해야 합니다.")
-        ktas_options = classify_ktas_rag(clean_text, sbar, rag_vector_store)
-        top_candidate = ktas_options[0] if ktas_options else {
-            "ktas": 3,
-            "reason": "RAG 후보 생성에 실패하여 기본 판정으로 전환",
-            "confidence": 0.45,
-        }
-    else:
-        ktas_result = classify_ktas(sbar)
-        top_candidate = {
-            "ktas": ktas_result["ktas"],
-            "reason": ktas_result["reason"],
-            "confidence": 1.0,
-        }
-
+    ktas_result = classify_ktas(sbar)
     llm_hospital = sbar.get("B", {}).get("followup_hospital")
-    result = {
+
+    return {
         "text": clean_text,
         "sbar": sbar,
-        "ktas": top_candidate["ktas"],
-        "reason": top_candidate["reason"],
-        "confidence": top_candidate["confidence"],
+        "ktas": ktas_result["ktas"],
+        "reason": ktas_result["reason"],
         "chief_complaint": sbar.get("S", {}).get("chief_complaint"),
         "requirement": sbar.get("S", {}).get("requirement"),
         "followup_hospital_raw": raw_hospital or llm_hospital,
         "followup_hospital": final_hospital or raw_hospital or llm_hospital,
     }
-
-    if ktas_options is not None:
-        result["ktas_options"] = ktas_options
-
-    return result
 
 
 # =====================================================

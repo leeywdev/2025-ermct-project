@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { ParamedicDashboard } from './components/ParamedicDashboard';
 import { HospitalDashboard } from './components/HospitalDashboard';
+import { ERTabletDashboard } from './components/ERTabletDashboard';
 import { UserRole } from './types';
 import { 
   LAYOUT_CONTAINER, 
@@ -277,7 +278,7 @@ export default function App() {
       return <ParamedicDashboard userName={user.name} onLogout={handleLogout} />;
     }
     if (user.role === 'hospital') {
-      return <HospitalDashboard onLogout={handleLogout} />;
+      return <ERTabletDashboard onLogout={handleLogout} />;
     }
   }
 
