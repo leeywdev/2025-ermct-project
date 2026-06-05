@@ -497,43 +497,11 @@ def _build_stage1_response(stage1_result: dict) -> RoutingCandidateResponse:
         else {}
     )
 
-    # 기존 병원이 있으면 추가
-    hospitals: List[RoutingCandidateHospital] = []
-    followup_hospital = payload_dict.get("hospital_followup")
-    followup_id = None
-    
-    if followup_hospital:
-        followup_id = followup_hospital
-        hospitals.append(
-            RoutingCandidateHospital(
-                id=followup_hospital,
-                name=followup_hospital,
-                address="",
-                phone="",
-                emergency_phone="",
-                latitude=0.0,
-                longitude=0.0,
-                procedure_beds={},
-                total_effective_beds=0,
-                has_any_bed=False,
-                groups_with_beds=[],
-                groups_with_beds_labels=[],
-                supported_complaints=[],
-                supported_complaint_labels=[],
-                mkiosk_flags=[],
-                coverage_score=0.0,
-                coverage_level="NONE",
-                priority_score=0.0,
-                reason_summary="환자가 지정한 병원",
-            )
-        )
-
     return RoutingCandidateResponse(
-        followup_id=followup_id,
-        hospitals=hospitals,
-        case=routing_case, 
+        followup_id=None,
+        case=routing_case,
+        hospitals=[],
         stt_vitals=stt_vitals,
-        ktas_options=stage1_result.get("ktas_options") if isinstance(stage1_result, dict) else None,
     )
 
 
@@ -1825,7 +1793,7 @@ async def predict_text(req: TextKTASRequest = Body(...)):
     음성 파이프라인과 동일한 decide_ktas_1to3 로직을 사용.
     """
     print("\n[Stage 1] 텍스트 분석 및 KTAS 분류 중...")
-    stage1_result = ktas_from_text(req.text, use_rag=True)
+    stage1_result = ktas_from_text(req.text)
     return _build_stage1_response(stage1_result)
 
     payload_dict = build_stage2_payload(stage1_result)

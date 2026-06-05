@@ -161,7 +161,7 @@ class TriageRequest(BaseModel):
     """
     프리호스피탈 단계에서 들어오는 triage 요청 정보
 
-    - ktas: 1~5까지 허용
+    - ktas: 1~3 위주로 올 예정이지만, 형식상 1~5까지 허용
     - complaint_id: 1~10 (가슴통증, 호흡곤란, 신경학, 복통/소화기, 출혈, 의식변화,
                          외상, 산부인과, 소아, 정신과)
     - sido/sigungu: 어떤 지역 병원 풀을 볼지
@@ -403,10 +403,6 @@ class RoutingCandidateResponse(BaseModel):
     stt_vitals: Optional[Dict[str, Any]] = Field(
         default=None,
         description="음성 인식(STT)에서 추출된 활력징후/AVPU 요약 (keys: avpu, rr, bp_sys, bp_dia, hr, bt, spo2 등)",
-    )
-    ktas_options: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="KTAS 후보 목록 (ktas, reason, confidence, evidence 등)",
     )
 
 class NearestRoutingRequest(RoutingCandidateResponse):

@@ -4,30 +4,31 @@
 import os
 import re
 import tempfile
-from pathlib import Path
-from typing import Optional, Union, IO
+from typing import Union, IO
 from difflib import SequenceMatcher, get_close_matches
 
 import whisper
+from openai import OpenAI
 from dotenv import load_dotenv
 from app.ktas_engine import run_ktas_engine
-from app.ktas_rag import KtasVectorStore
-from app.openai_client import get_openai_client
 
 load_dotenv()
 
 os.environ["XDG_CACHE_HOME"] = r"C:\whisper_cache"
 os.environ["WHISPER_CACHE_DIR"] = r"C:\whisper_cache"
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("⚠️ 경고: .env 파일에 OPENAI_API_KEY가 없습니다.")
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 whisper_model = None
 
-RAG_VECTOR_STORE: Optional[KtasVectorStore] = None
-RAG_INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "ktas_guideline_index.json"
-if RAG_INDEX_PATH.exists():
-    try:
-        RAG_VECTOR_STORE = KtasVectorStore.load(RAG_INDEX_PATH)
-    except Exception as exc:
-        print(f"[WARN] RAG vector store 로드 실패: {exc}")
+
+def get_openai_client() -> OpenAI:
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file.")
+    return client
 
 
 def get_whisper_model():
@@ -465,38 +466,28 @@ def transcribe_clean_and_match_hospital(audio_source: Union[str, IO]) -> dict:
     result = run_ktas_engine(
         clean_text,
         raw_hospital,
-        final_hospital,
-        use_rag=RAG_VECTOR_STORE is not None,
-        rag_vector_store=RAG_VECTOR_STORE,
+        final_hospital
     )
 
     return result
     
+    return {
+         "raw_text": raw_text,
+         "clean_text": clean_text,
+         "raw_hospital": raw_hospital,
+         "final_hospital": final_hospital
+     }
 
 
 def ktas_from_audio(audio_source: Union[str, IO]) -> dict:
     return transcribe_clean_and_match_hospital(audio_source)
 
 
-def ktas_from_text(
-    text: str,
-    use_rag: Optional[bool] = None,
-    rag_vector_store=None,
-) -> dict:
+def ktas_from_text(text: str) -> dict:
     clean_text = llm_clean_text(text)
     raw_hospital = extract_followup_hospital(clean_text)
     final_hospital = best_match_hospital(raw_hospital, SEOUL_HOSPITAL_DB)
-    if rag_vector_store is None:
-        rag_vector_store = RAG_VECTOR_STORE
-    if use_rag is None:
-        use_rag = rag_vector_store is not None
-    return run_ktas_engine(
-        clean_text,
-        raw_hospital,
-        final_hospital,
-        use_rag=use_rag,
-        rag_vector_store=rag_vector_store,
-    )
+    return run_ktas_engine(clean_text, raw_hospital, final_hospital)
 
 
 def build_stage2_payload(stage1_result: dict) -> dict:
