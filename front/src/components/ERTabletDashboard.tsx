@@ -190,7 +190,9 @@ function mapHospitalStatus(row: any): BedService[] {
 export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId, onLogout }) => {
   const [activeTab,       setActiveTab]       = useState<TabType>('dash');
   // 이송 요청 대기 (수락 전 waiting 상태)
-  const [requests,        setRequests]        = useState<HospitalRequest[]>(DEMO_REQUESTS);
+  const [requests,        setRequests]        = useState<HospitalRequest[]>(
+    demoAuthEnabled ? DEMO_REQUESTS : [],
+  );
   // 수락된 환자 (이송 중 → 대기 환자 탭에 표시)
   const [approved,        setApproved]        = useState<HospitalRequest[]>([]);
   const [bedServices,     setBedServices]     = useState<BedService[]>(
@@ -369,7 +371,7 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
 
   const handleApprove = async (id: string) => {
     const req = requests.find(r => r.id === id);
-    if (req) {
+    if (demoAuthEnabled && req) {
       setRequests(prev => prev.filter(r => r.id !== id));
       setApproved(prev => [{ ...req, status: 'approved' as const }, ...prev]);
     }
