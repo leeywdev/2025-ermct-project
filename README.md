@@ -119,6 +119,58 @@
 
 ## 환경 변수 메모
 
+### hospital_status 동기화 스크립트
+
+`scripts/sync_hospital_status.py`는 ERMCT 실시간 병상 데이터를 조회해 Supabase
+`hospitals`와 `hospital_status` 테이블에 upsert하는 수동/운영용 스크립트입니다.
+기본 동작은 한 번 실행하고 종료하는 `--once` 모드입니다.
+
+필수 환경 변수:
+
+```powershell
+$env:ERMCT_SERVICE_KEY="..."
+$env:HOSPITAL_STATUS_SYNC_SIDO="경기도"
+$env:HOSPITAL_STATUS_SYNC_SIGUNGU="성남시"
+```
+
+실제 Supabase upsert에는 서버 전용 키가 추가로 필요합니다.
+
+```powershell
+$env:SUPABASE_URL="https://<project-ref>.supabase.co"
+$env:SUPABASE_SERVICE_ROLE_KEY="..."
+```
+
+`SUPABASE_SERVICE_ROLE_KEY`는 backend/server-side 실행에만 사용해야 합니다. 프론트엔드,
+브라우저 콘솔, 스크린샷, 로그 공유, 클라이언트 번들에 노출하지 마세요.
+
+Dry run:
+
+```powershell
+poetry run python scripts\sync_hospital_status.py --dry-run --verbose --sido "경기도" --sigungu "성남시"
+```
+
+Real upsert:
+
+```powershell
+poetry run python scripts\sync_hospital_status.py --sido "경기도" --sigungu "성남시"
+```
+
+Local continuous mode:
+
+```powershell
+poetry run python scripts\sync_hospital_status.py --interval-seconds 300
+```
+
+Cron example:
+
+```cron
+*/5 * * * * cd /path/to/ermct-backend && /path/to/poetry run python scripts/sync_hospital_status.py >> /var/log/hospital_status_sync.log 2>&1
+```
+
+Before using cron, configure `ERMCT_SERVICE_KEY`, `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `HOSPITAL_STATUS_SYNC_SIDO`, and
+`HOSPITAL_STATUS_SYNC_SIGUNGU` in the scheduler environment or a protected env file.
+
 - 백엔드 예시는 루트 `.env.example` 에 정리되어 있습니다.
 - 프론트엔드 Vite 앱의 실제 프로젝트 루트는 `front` 이므로, 브라우저에서 사용할 키는 `front/.env` 에 넣어야 합니다.
 - Vite 환경 변수는 반드시 `VITE_` prefix가 필요합니다.

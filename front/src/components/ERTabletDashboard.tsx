@@ -208,6 +208,7 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
   const [currentTime,     setCurrentTime]     = useState('');
   const [ktasFilter,      setKtasFilter]      = useState<'all' | '1-2'>('all');
   const [hospitalDisplayName, setHospitalDisplayName] = useState(hospitalId || 'Hospital');
+  const [lastBedStatusUpdatedAt, setLastBedStatusUpdatedAt] = useState<string | null>(null);
 
   // 시계
   useEffect(() => {
@@ -262,6 +263,7 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
       setRequests(DEMO_REQUESTS);
       setBedServices(DEMO_BED_SERVICES);
       setBedStatusState('ready');
+      setLastBedStatusUpdatedAt(new Date().toISOString());
       return;
     }
 
@@ -270,10 +272,12 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
       setApproved([]);
       setBedServices([]);
       setBedStatusState('empty');
+      setLastBedStatusUpdatedAt(null);
       return;
     }
 
     let cleanup: (() => void) | undefined;
+    let refreshIntervalId: ReturnType<typeof setInterval> | undefined;
     const fetchTransferRequests = async () => {
       const { data } = await supabase
         .from('transfer_requests').select('*')
@@ -287,7 +291,7 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
     };
 
     const fetchHospitalStatus = async () => {
-      setBedStatusState('loading');
+      setBedStatusState(prev => prev === 'ready' ? prev : 'loading');
       const { data, error } = await supabase
         .from('hospital_status').select('*')
         .eq('hospital_id', hospitalId)
@@ -297,6 +301,7 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
         console.error('Failed to load hospital status:', error);
         setBedServices([]);
         setBedStatusState('error');
+        setLastBedStatusUpdatedAt(null);
         return;
       }
 
@@ -304,11 +309,13 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
         const mapped = mapHospitalStatus(data);
         setBedServices(mapped);
         setBedStatusState(mapped.length > 0 ? 'ready' : 'empty');
+        setLastBedStatusUpdatedAt(data.updated_at || new Date().toISOString());
         return;
       }
 
       setBedServices([]);
       setBedStatusState('empty');
+      setLastBedStatusUpdatedAt(null);
     };
 
     const fetchData = async () => {
@@ -323,7 +330,13 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
           .on('postgres_changes', { event: '*', schema: 'public', table: 'hospital_status', filter: `hospital_id=eq.${hospitalId}` },
             () => { void fetchHospitalStatus(); })
           .subscribe();
-        cleanup = () => { supabase.removeChannel(channel); };
+        refreshIntervalId = setInterval(() => { void fetchHospitalStatus(); }, 30_000);
+        cleanup = () => {
+          if (refreshIntervalId) {
+            clearInterval(refreshIntervalId);
+          }
+          supabase.removeChannel(channel);
+        };
       } catch {
         setIsLoading(false);
       }
@@ -439,6 +452,13 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
       : bedStatusState === 'error'
         ? 'Hospital bed status could not be loaded.'
         : 'No hospital bed status data.';
+  const lastBedStatusUpdatedLabel = lastBedStatusUpdatedAt
+    ? new Date(lastBedStatusUpdatedAt).toLocaleTimeString('ko-KR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    : null;
   const filteredApproved = ktasFilter === '1-2' ? approved.filter(r => r.ktasLevel <= 2) : approved;
   const ktasCounts     = [1,2,3,4,5].map(k => ({ level: k, count: approved.filter(r => r.ktasLevel === k).length }));
   const maxKtas        = Math.max(...ktasCounts.map(k => k.count), 1);
@@ -794,6 +814,11 @@ export const ERTabletDashboard: React.FC<ERTabletDashboardProps> = ({ hospitalId
           <span style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
             <Clock size={13} /> {currentTime}
           </span>
+          {lastBedStatusUpdatedLabel && (
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>
+              Beds updated {lastBedStatusUpdatedLabel}
+            </span>
+          )}
           {criticalCount > 0 && (
             <span style={{ fontSize: 12, background: '#fee2e2', color: '#dc2626', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>
               응급 알림 {criticalCount}건
