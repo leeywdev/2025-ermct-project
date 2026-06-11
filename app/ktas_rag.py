@@ -84,8 +84,7 @@ class KtasVectorStore:
     def encode_text(self, text: str) -> list[float]:
         if not text.strip():
             return []
-        client = get_openai_client()
-        response = client.embeddings.create(model=self.embedding_model, input=text)
+        response = get_openai_client().embeddings.create(model=self.embedding_model, input=text)
         return response.data[0].embedding
 
     @staticmethod
