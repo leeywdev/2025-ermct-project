@@ -11,7 +11,7 @@ from difflib import SequenceMatcher, get_close_matches
 import whisper
 from dotenv import load_dotenv
 from app.ktas_engine import run_ktas_engine
-from app.ktas_rag import KtasVectorStore
+from app.ktas_rag import GPT_MODEL, KtasVectorStore
 from app.openai_client import get_openai_client
 
 load_dotenv()
@@ -178,7 +178,7 @@ def llm_clean_text(raw_text: str) -> str:
 
     try:
         response = get_openai_client().chat.completions.create(
-            model="gpt-5.5",
+            model=GPT_MODEL,
             messages=[
                 {
                     "role": "system",

@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.ktas_rag import KtasVectorStore, classify_ktas_rag
+from app.ktas_rag import GPT_MODEL, KtasVectorStore, classify_ktas_rag
 from app.openai_client import get_openai_client
 
 # =====================================================
@@ -84,7 +84,7 @@ def call_llm2_for_sbar(clean_text: str) -> str:
 
     
     response = get_openai_client().chat.completions.create(
-        model="gpt-5.5",
+        model=GPT_MODEL,
         messages=[
             {
                 "role": "system",

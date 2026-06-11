@@ -10,6 +10,8 @@ from openai import OpenAI
 
 from app.openai_client import get_openai_client
 
+GPT_MODEL = "gpt-5.5"
+EMBEDDING_MODEL = "text-embedding-3-large"
 
 @dataclass
 class KtasGuidelineDoc:
@@ -22,7 +24,6 @@ class KtasGuidelineDoc:
     source: str
     age_group: Optional[str] = None
     first_impression: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
     embedding: Optional[list[float]] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -36,7 +37,6 @@ class KtasGuidelineDoc:
             "source": self.source,
             "age_group": self.age_group,
             "first_impression": self.first_impression,
-            "metadata": self.metadata,
             "embedding": self.embedding,
         }
 
@@ -52,7 +52,6 @@ class KtasGuidelineDoc:
             source=data.get("source", ""),
             age_group=data.get("age_group"),
             first_impression=data.get("first_impression", False),
-            metadata=data.get("metadata", {}),
             embedding=data.get("embedding"),
         )
 
@@ -60,7 +59,7 @@ class KtasGuidelineDoc:
 class KtasVectorStore:
     def __init__(self, docs: Optional[List[KtasGuidelineDoc]] = None) -> None:
         self.docs = docs or []
-        self.embedding_model = "text-embedding-3-large"
+        self.embedding_model = EMBEDDING_MODEL
 
     @classmethod
     def load(cls, path: Path) -> "KtasVectorStore":
@@ -73,7 +72,7 @@ class KtasVectorStore:
             json.dumps(
                 {
                     "documents": [doc.to_dict() for doc in self.docs],
-                    "created_by": "ktas_rag",
+                    "created_by": "Yu Won Lee",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -124,7 +123,6 @@ class KtasVectorStore:
                 "source": item["doc"].source,
                 "first_impression": item["doc"].first_impression,
                 "age_group": item["doc"].age_group,
-                "metadata": item["doc"].metadata,
                 "score": item["score"],
             }
             for item in hits[:top_k]
@@ -136,8 +134,8 @@ def build_rag_prompt(clean_text: str, sbar: dict, retrieved_docs: List[Dict[str,
         "당신은 한국 성인 응급환자의 KTAS 분류 전문가입니다.",
         "이 분류는 성인 환자만 대상으로 합니다. 소아/영유아 기준은 무시하세요.",
         "첫인상 평가는 5초 이내에 파악 가능한 중증 신호에 한정합니다.",
-        "KTAS 1은 생명 위협성 또는 즉각적 소생/산소/순환 지원이 필요한 경우로 제한합니다.",
-        "KTAS 2~5는 위급성 단계로, 문맥과 기준에 따라 3가지 후보를 추천하십시오.",
+        "KTAS 1은 무의식, 중증 호흡곤란, 중증 탈수 또는 즉각적 소생/순환 지원이 필요한 경우(명백한 쇼크, 명백한 의식소실)로 제한합니다.",
+        "KTAS 1~5는 중증도 단계로, 문맥과 기준에 따라 3가지 후보를 추천하십시오.",
         "반드시 KTAS 1~5 숫자 형태로 반환합니다.",
         "출력은 JSON 배열만 사용하십시오.",
         "설명은 한국어로 작성하십시오."
@@ -218,7 +216,7 @@ def classify_ktas_rag(
 
     prompt = build_rag_prompt(clean_text, sbar, retrieved)
     response = get_openai_client().chat.completions.create(
-        model="gpt-5.5",
+        model=GPT_MODEL,
         messages=[
             {"role": "system", "content": "KTAS RAG 추천 엔진입니다. 반드시 JSON 배열만 반환하세요."},
             {"role": "user", "content": prompt},

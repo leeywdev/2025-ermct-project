@@ -10,13 +10,13 @@ from app.ktas_rag import KtasGuidelineDoc, KtasVectorStore
 
 CSV_HEADER = [
     "code",
+    "subcode1",
     "category",
-    "sub_category",
-    "detail",
+    "subcode2",
+    "sub-category",
+    "subcode3",
+    "symptom",
     "ktas",
-    "note",
-    "extra1",
-    "extra2",
 ]
 
 
@@ -30,22 +30,17 @@ def parse_prektas_csv(csv_path: Path) -> List[KtasGuidelineDoc]:
                 continue
             row = raw + [""] * (len(CSV_HEADER) - len(raw))
             code = row[0].strip()
-            category = row[1].strip() or None
-            sub_category = row[2].strip() or None
-            detail = row[3].strip() or None
+            category = row[2].strip() or None
+            # category에 "첫인상 평가"가 포함돼있으면 first_impression = True
+            first_impression = False
+            if "첫인상 평가" in category:
+                first_impression = True
+            sub_category = row[4].strip() or None
+            detail = row[6].strip() or None
             ktas = None
-            if row[4].strip().isdigit():
-                ktas = int(row[4].strip())
-            notes = [cell.strip() for cell in row[5:] if cell.strip()]
-            text_parts = [
-                f"코드: {code}",
-                f"분류: {category or 'unknown'}",
-                f"세부분류: {sub_category or 'unknown'}",
-                f"설명: {detail or ''}",
-            ]
-            if notes:
-                text_parts.append("추가정보: " + " | ".join(notes))
-            full_text = "\n".join(text_parts)
+            if row[7].strip().isdigit():
+                ktas = int(row[7].strip())
+            # notes, metadata 삭제
             docs.append(
                 KtasGuidelineDoc(
                     id=f"prektas-{code}",
@@ -53,11 +48,10 @@ def parse_prektas_csv(csv_path: Path) -> List[KtasGuidelineDoc]:
                     ktas_level=ktas,
                     category=category,
                     sub_category=sub_category,
-                    text=full_text,
+                    text=detail,
                     source="original_pre-ktas.csv",
                     age_group="adult",
-                    first_impression=False,
-                    metadata={"notes": notes},
+                    first_impression=first_impression,
                 )
             )
     return docs
