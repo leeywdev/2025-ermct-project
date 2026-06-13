@@ -24,6 +24,51 @@ if not OPENAI_API_KEY:
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 whisper_model = None
 
+INVALID_STT_PATTERNS = [
+    "시청해주셔서감사합니다",
+    "구독좋아요",
+    "좋아요부탁드립니다",
+]
+
+
+class InvalidSTTAudioError(ValueError):
+    def __init__(self, message: str, reason: str, stt_text: str | None = None):
+        super().__init__(message)
+        self.reason = reason
+        self.stt_text = stt_text
+
+
+def normalize_stt_text(text: str) -> str:
+    return "".join((text or "").strip().split())
+
+
+def is_likely_stt_hallucination(text: str) -> bool:
+    compact = normalize_stt_text(text)
+
+    if not compact:
+        return True
+
+    if len(compact) <= 2:
+        return True
+
+    if compact in {"네", "예", "음", "어", "아"}:
+        return True
+
+    if "감사합니다" in compact and len(compact) <= 20:
+        return True
+
+    return any(pattern in compact for pattern in INVALID_STT_PATTERNS)
+
+
+def is_repetition_amplified(raw_text: str, clean_text: str) -> bool:
+    raw_compact = normalize_stt_text(raw_text)
+    clean_compact = normalize_stt_text(clean_text)
+    if not raw_compact or raw_compact == clean_compact:
+        return False
+    if clean_compact.count(raw_compact) >= 2:
+        return True
+    return False
+
 
 def get_openai_client() -> OpenAI:
     if client is None:
@@ -48,13 +93,17 @@ def speech_to_text(audio_source: Union[str, IO]) -> str:
         delete_after = False
     else:
         delete_after = True
-        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
+        source_name = str(getattr(audio_source, "name", "") or "")
+        suffix = os.path.splitext(source_name)[1] or ".webm"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             try:
                 audio_source.seek(0)
             except Exception:
                 pass
             tmp.write(audio_source.read())
             audio_path = tmp.name
+        print("[stt] temporary audio path:", audio_path)
+        print("[stt] temporary audio bytes:", os.path.getsize(audio_path))
 
     try:
         result = model.transcribe(audio_path, language="ko")
@@ -450,11 +499,25 @@ def transcribe_clean_and_match_hospital(audio_source: Union[str, IO]) -> dict:
     print("\n[STT 결과]")
     print(raw_text)
 
+    if is_likely_stt_hallucination(raw_text):
+        raise InvalidSTTAudioError(
+            "음성이 명확하게 인식되지 않았습니다. 증상을 다시 녹음해주세요.",
+            reason="stt_hallucination",
+            stt_text=raw_text,
+        )
+
     clean_text = llm_clean_text(raw_text)
     
 
     print("\n[LLM 보정 후 문장]")
     print(clean_text)
+
+    if is_likely_stt_hallucination(clean_text) or is_repetition_amplified(raw_text, clean_text):
+        raise InvalidSTTAudioError(
+            "음성이 명확하게 인식되지 않았습니다. 증상을 다시 녹음해주세요.",
+            reason="stt_cleaning_invalid",
+            stt_text=raw_text,
+        )
 
     raw_hospital = extract_followup_hospital(clean_text)
     final_hospital = best_match_hospital(raw_hospital, SEOUL_HOSPITAL_DB)

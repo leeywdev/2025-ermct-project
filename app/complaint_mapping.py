@@ -189,19 +189,179 @@ CHIEF_COMPLAINT_CODE_TO_ID: dict[str, int] = {
     "psychiatric": 10,
 }
 
+CHIEF_COMPLAINT_CANONICAL_BY_ID: dict[int, str] = {
+    1: "chest_pain",
+    2: "dyspnea",
+    3: "neuro",
+    4: "abdominal",
+    5: "bleeding",
+    6: "altered",
+    7: "trauma",
+    8: "obgyn",
+    9: "pediatric",
+    10: "psychiatric",
+}
+
+CHIEF_COMPLAINT_ALIAS_TO_CANONICAL: dict[str, str] = {
+    "chest_pain": "chest_pain",
+    "chest pain": "chest_pain",
+    "chest": "chest_pain",
+    "흉통": "chest_pain",
+    "가슴 통증": "chest_pain",
+    "dyspnea": "dyspnea",
+    "respiratory_distress": "dyspnea",
+    "respiratory distress": "dyspnea",
+    "shortness of breath": "dyspnea",
+    "sob": "dyspnea",
+    "숨을 못 쉼": "dyspnea",
+    "숨을 못쉼": "dyspnea",
+    "숨 못 쉼": "dyspnea",
+    "숨못쉼": "dyspnea",
+    "호흡곤란": "dyspnea",
+    "neuro": "neuro",
+    "neuro_deficit": "neuro",
+    "neuro deficit": "neuro",
+    "neurologic deficit": "neuro",
+    "stroke_like": "neuro",
+    "stroke like": "neuro",
+    "stroke-like": "neuro",
+    "acute focal weakness": "neuro",
+    "focal weakness": "neuro",
+    "unilateral weakness": "neuro",
+    "weakness on one side": "neuro",
+    "paralysis": "neuro",
+    "hemiparesis": "neuro",
+    "편측 약화": "neuro",
+    "한쪽 마비": "neuro",
+    "마비": "neuro",
+    "신경학적 결손": "neuro",
+    "뇌졸중 의심": "neuro",
+    "abdominal": "abdominal",
+    "abdominal_pain": "abdominal",
+    "abdominal pain": "abdominal",
+    "gi_symptom": "abdominal",
+    "gi symptom": "abdominal",
+    "bleeding": "bleeding",
+    "ams": "altered",
+    "altered": "altered",
+    "altered_mental_status": "altered",
+    "altered mental status": "altered",
+    "trauma": "trauma",
+    "low back pain": "trauma",
+    "lower back pain": "trauma",
+    "back pain": "trauma",
+    "lumbar pain": "trauma",
+    "lumbago": "trauma",
+    "back injury": "trauma",
+    "허리 통증": "trauma",
+    "허리가 아픔": "trauma",
+    "허리 아파요": "trauma",
+    "요통": "trauma",
+    "등 통증": "trauma",
+    "허리 부상": "trauma",
+    "obgyn": "obgyn",
+    "ob_gyn": "obgyn",
+    "ob gyn": "obgyn",
+    "pregnancy": "obgyn",
+    "pediatric": "pediatric",
+    "ped": "pediatric",
+    "psy": "psychiatric",
+    "psychiatric": "psychiatric",
+    "flank pain": "abdominal",
+    "renal colic": "abdominal",
+    "kidney stone": "abdominal",
+    "옆구리 통증": "abdominal",
+}
+
+CHIEF_COMPLAINT_PHRASE_TO_CANONICAL: tuple[tuple[str, str], ...] = (
+    ("acute focal weakness", "neuro"),
+    ("focal weakness", "neuro"),
+    ("unilateral weakness", "neuro"),
+    ("weakness on one side", "neuro"),
+    ("neuro deficit", "neuro"),
+    ("neurologic deficit", "neuro"),
+    ("stroke like", "neuro"),
+    ("stroke-like", "neuro"),
+    ("stroke", "neuro"),
+    ("paralysis", "neuro"),
+    ("hemiparesis", "neuro"),
+    ("편측 약화", "neuro"),
+    ("한쪽 마비", "neuro"),
+    ("마비", "neuro"),
+    ("신경학적 결손", "neuro"),
+    ("뇌졸중 의심", "neuro"),
+    ("뇌졸중", "neuro"),
+    ("dyspnea", "dyspnea"),
+    ("respiratory distress", "dyspnea"),
+    ("shortness of breath", "dyspnea"),
+    ("low back pain", "trauma"),
+    ("lower back pain", "trauma"),
+    ("back pain", "trauma"),
+    ("lumbar pain", "trauma"),
+    ("lumbago", "trauma"),
+    ("back injury", "trauma"),
+    ("허리 통증", "trauma"),
+    ("허리가 아픔", "trauma"),
+    ("허리 아파요", "trauma"),
+    ("요통", "trauma"),
+    ("등 통증", "trauma"),
+    ("허리 부상", "trauma"),
+    ("flank pain", "abdominal"),
+    ("renal colic", "abdominal"),
+    ("kidney stone", "abdominal"),
+    ("옆구리 통증", "abdominal"),
+    ("숨을 못", "dyspnea"),
+    ("숨 못", "dyspnea"),
+    ("숨못", "dyspnea"),
+    ("호흡곤란", "dyspnea"),
+)
+
 # -------------------------------------------------
 # Helper 함수들
 # -------------------------------------------------
 
-def complaint_id_from_chief_complaint(code: str) -> int | None:
+def normalize_chief_complaint(code: str | None) -> str | None:
+    """
+    Normalize KTAS/STT/route chief_complaint values to route canonical codes.
+    """
+    if not code:
+        return None
+
+    key = str(code).strip().lower()
+    if not key:
+        return None
+
+    if key in CHIEF_COMPLAINT_ALIAS_TO_CANONICAL:
+        return CHIEF_COMPLAINT_ALIAS_TO_CANONICAL[key]
+
+    underscored_key = key.replace("-", "_").replace(" ", "_")
+    if underscored_key in CHIEF_COMPLAINT_ALIAS_TO_CANONICAL:
+        return CHIEF_COMPLAINT_ALIAS_TO_CANONICAL[underscored_key]
+
+    spaced_key = key.replace("_", " ").replace("-", " ")
+    if spaced_key in CHIEF_COMPLAINT_ALIAS_TO_CANONICAL:
+        return CHIEF_COMPLAINT_ALIAS_TO_CANONICAL[spaced_key]
+
+    for phrase, canonical in CHIEF_COMPLAINT_PHRASE_TO_CANONICAL:
+        if phrase in key or phrase in spaced_key:
+            return canonical
+
+    if key in CHIEF_COMPLAINT_CODE_TO_ID:
+        complaint_id = CHIEF_COMPLAINT_CODE_TO_ID[key]
+        return CHIEF_COMPLAINT_CANONICAL_BY_ID.get(complaint_id)
+
+    return None
+
+
+def complaint_id_from_chief_complaint(code: str | None) -> int | None:
     """
     KTAS 모듈에서 넘어오는 chief_complaint 코드를
     내부 complaint_id(1~10)로 변환.
     """
-    if not code:
+    canonical = normalize_chief_complaint(code)
+    if not canonical:
         return None
-    key = code.strip().lower()
-    return CHIEF_COMPLAINT_CODE_TO_ID.get(key)
+    return CHIEF_COMPLAINT_CODE_TO_ID.get(canonical)
 
 
 def required_procedure_groups_for_complaint(complaint_id: int) -> List[str]:

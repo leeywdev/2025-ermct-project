@@ -130,8 +130,22 @@ def call_llm2_for_sbar(clean_text: str) -> str:
     - 심각도는 아래중 하나로 매핑합니다.
         mild | moderate | severe | unknown
     - chief_complaint_group은 대분류를 넣는다.
-    - chief_complaint는 실제 주호소를 짧은 영어 의학 표현으로 정규화한다.
-    예: 호흡곤란 → dyspnea, 흉통 → chest pain, 의식저하 → mental change
+    - chief_complaint는 반드시 아래 allowed_chief_complaints 중 하나만 넣는다.
+        chest_pain
+        dyspnea
+        neuro
+        abdominal
+        bleeding
+        altered
+        trauma
+        obgyn
+        pediatric
+        psychiatric
+    - 자유 텍스트 라벨을 chief_complaint에 넣지 않는다.
+      예: low back pain, back pain, lumbar pain, lumbago, back injury, 허리 통증, 요통은 trauma로 매핑한다.
+      예: flank pain, renal colic, kidney stone, 옆구리 통증은 abdominal로 매핑한다.
+      예: acute focal weakness, stroke_like, 한쪽 마비는 neuro로 매핑한다.
+      예: 호흡곤란, 숨을 못 쉼은 dyspnea로 매핑한다.
     - modifiers에는 KTAS 판단에 영향을 줄 수 있는 표현을 넣는다.
     예: severe dyspnea, moderate dyspnea, SpO2 85%, sudden onset, LOC positive, crushing pain, tearing pain
     - 활력징후는 숫자만 넣는다.

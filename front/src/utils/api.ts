@@ -128,7 +128,40 @@ export interface RoutePathResponse {
 export async function routeFromKTAS(
   payload: KtasRoutePayload,
 ): Promise<RoutingCandidateResponse> {
-  return postJson<RoutingCandidateResponse>("/api/ktas/route/seoul", payload);
+  const path = "/api/ktas/route/seoul";
+  console.log("[route/seoul request payload]", JSON.stringify(payload, null, 2));
+
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const responseText = await res.text();
+  let responseBody: unknown = responseText;
+  if (responseText) {
+    try {
+      responseBody = JSON.parse(responseText);
+    } catch {
+      responseBody = responseText;
+    }
+  }
+
+  console.log("[route/seoul status]", res.status);
+  console.log("[route/seoul response]", responseBody);
+
+  if (!res.ok) {
+    throw new ApiError(
+      path,
+      res.status,
+      responseText || "",
+      res.statusText,
+    );
+  }
+
+  return responseBody as RoutingCandidateResponse;
 }
 
 export async function routeNearest(

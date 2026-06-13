@@ -8,6 +8,7 @@ from app.complaint_mapping import (
     MKIOSK_TO_COMPLAINTS,
     complaint_id_from_chief_complaint,
     complaints_from_mkiosk_flags,
+    normalize_chief_complaint,
     required_procedure_groups_for_complaint,
 )
 from app.procedure_groups import PROCEDURE_GROUPS
@@ -29,6 +30,53 @@ class ComplaintMappingTests(unittest.TestCase):
         for value in ("", "   ", "unknown"):
             with self.subTest(value=value):
                 self.assertIsNone(complaint_id_from_chief_complaint(value))
+
+    def test_normalize_chief_complaint_maps_clinical_aliases(self) -> None:
+        cases = [
+            ("acute focal weakness", "neuro", 3),
+            ("focal weakness", "neuro", 3),
+            ("stroke_like", "neuro", 3),
+            ("한쪽 마비", "neuro", 3),
+            ("숨을 못 쉼", "dyspnea", 2),
+        ]
+
+        for value, expected_code, expected_id in cases:
+            with self.subTest(value=value):
+                self.assertEqual(normalize_chief_complaint(value), expected_code)
+                self.assertEqual(
+                    complaint_id_from_chief_complaint(value),
+                    expected_id,
+                )
+
+    def test_normalize_chief_complaint_returns_none_for_unknown_label(self) -> None:
+        self.assertIsNone(normalize_chief_complaint("unknown label"))
+        self.assertIsNone(complaint_id_from_chief_complaint("unknown label"))
+
+    def test_normalize_chief_complaint_maps_back_and_flank_pain_aliases(
+        self,
+    ) -> None:
+        cases = [
+            ("low back pain", "trauma", 7),
+            ("back pain", "trauma", 7),
+            ("lower back pain", "trauma", 7),
+            ("lumbar pain", "trauma", 7),
+            ("lumbago", "trauma", 7),
+            ("back injury", "trauma", 7),
+            ("허리 통증", "trauma", 7),
+            ("요통", "trauma", 7),
+            ("flank pain", "abdominal", 4),
+            ("renal colic", "abdominal", 4),
+            ("kidney stone", "abdominal", 4),
+            ("옆구리 통증", "abdominal", 4),
+        ]
+
+        for value, expected_code, expected_id in cases:
+            with self.subTest(value=value):
+                self.assertEqual(normalize_chief_complaint(value), expected_code)
+                self.assertEqual(
+                    complaint_id_from_chief_complaint(value),
+                    expected_id,
+                )
 
     def test_required_procedure_groups_for_complaint_returns_valid_group_ids(
         self,

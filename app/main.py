@@ -1,5 +1,6 @@
 # app/main.py
 import os
+from io import BytesIO
 
 from fastapi import FastAPI, Query, Response, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +8,13 @@ from pathlib import Path
 from typing import Dict, List, Set, Optional, Sequence, Tuple
 from fastapi import UploadFile, File # UploadFile, File 추가
 # 뒤에 ', get_whisper_model' 을 꼭 붙여야 합니다!
-from app.stt_cleaner import ktas_from_audio, ktas_from_text, build_stage2_payload, get_whisper_model
+from app.stt_cleaner import (
+    InvalidSTTAudioError,
+    ktas_from_audio,
+    ktas_from_text,
+    build_stage2_payload,
+    get_whisper_model,
+)
 from pydantic import BaseModel
 
 from .services.ermct_client import ErmctClient
@@ -474,14 +481,19 @@ def _build_stage1_response(stage1_result: dict) -> RoutingCandidateResponse:
     chief_complaint = payload_dict.get("chief_complaint", "unknown")
     complaint_id = complaint_id_from_chief_complaint(chief_complaint)
     if not complaint_id:
-        complaint_id = 0
-        complaint_label = chief_complaint
-        required_groups: List[str] = []
-        required_group_labels: List[str] = []
-    else:
-        complaint_label = COMPLAINT_LABELS.get(complaint_id, chief_complaint)
-        required_groups = required_procedure_groups_for_complaint(complaint_id)
-        required_group_labels = humanize_procedure_groups(required_groups)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "error": "KTAS chief_complaint could not be mapped to complaint_id.",
+                "reason": "unknown_chief_complaint",
+                "chief_complaint": chief_complaint,
+            },
+        )
+
+    complaint_label = COMPLAINT_LABELS.get(complaint_id, chief_complaint)
+    required_groups = required_procedure_groups_for_complaint(complaint_id)
+    required_group_labels = humanize_procedure_groups(required_groups)
 
     routing_case = RoutingCase(
         ktas=payload_dict.get("ktas_level", 0),
@@ -1747,9 +1759,38 @@ async def predict_audio(audio: UploadFile = File(...)):
     """
     [Stage 1 + Stage 2 통합]
     """
+    audio_bytes = await audio.read()
+    print("[stt] uploaded filename:", audio.filename)
+    print("[stt] content_type:", audio.content_type)
+    print("[stt] uploaded bytes:", len(audio_bytes))
+
+    if len(audio_bytes) < 3000:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "error": "음성이 너무 짧거나 명확하지 않습니다. 다시 녹음해주세요.",
+                "reason": "audio_too_small",
+            },
+        )
+
+    audio_buffer = BytesIO(audio_bytes)
+    audio_buffer.name = audio.filename or "recording.webm"
+
     # 1. [Stage 1] 음성 엔진 실행
     print("\n[Stage 1] 음성 분석 및 KTAS 분류 중...")
-    stage1_result = ktas_from_audio(audio.file)
+    try:
+        stage1_result = ktas_from_audio(audio_buffer)
+    except InvalidSTTAudioError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "error": str(exc),
+                "reason": exc.reason,
+                "stt_text": exc.stt_text,
+            },
+        ) from exc
     return _build_stage1_response(stage1_result)
 
     # 2. 데이터 변환

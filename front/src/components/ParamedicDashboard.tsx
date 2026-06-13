@@ -40,6 +40,7 @@ import {
   routeFromKTAS,
   routeNearest,
   routePath,
+  KtasRoutePayload,
   RoutingCandidateResponse,
   RoutingCandidateHospital,
   predictAudio,
@@ -73,8 +74,29 @@ type MarkerEntry = {
   current?: boolean;
   rank?: number;
 };
+type NormalizedKtasCase = {
+  ktas: number | null;
+  complaint_id: number | null;
+  complaint_label?: string | null;
+  corrected_text?: string | null;
+};
 
 const DEFAULT_MAP_CENTER = { lat: 37.4200, lon: 127.1268 };
+const MIN_AUDIO_BLOB_BYTES = 10000;
+const MIN_AUDIO_BYTES_PER_SECOND = 1500;
+const MIN_RECORDING_MS = 800;
+const COMPLAINT_ID_TO_CHIEF_COMPLAINT: Record<number, string> = {
+  1: "chest_pain",
+  2: "dyspnea",
+  3: "neuro",
+  4: "abdominal",
+  5: "bleeding",
+  6: "altered",
+  7: "trauma",
+  8: "obgyn",
+  9: "pediatric",
+  10: "psychiatric",
+};
 const CURRENT_LOCATION_MARKER_SVG = encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34">
     <circle cx="17" cy="17" r="13" fill="#2563EB" fill-opacity="0.18" />
@@ -234,6 +256,7 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const [requestStatus, setRequestStatus] = useState<'waiting' | 'approved' | 'rejected'>('waiting');
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [routingResponse, setRoutingResponse] = useState<RoutingCandidateResponse | null>(null);
+  const [pendingKtasCase, setPendingKtasCase] = useState<NormalizedKtasCase | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [locationRequested, setLocationRequested] = useState(false);
   const [awaitingLocation, setAwaitingLocation] = useState(false);
@@ -245,9 +268,11 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const recordTimeoutRef = useRef<number | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
   const locationFallbackTimeoutRef = useRef<number | null>(null);
   const nearestRequestInFlightRef = useRef(false);
   const lastNearestRequestKeyRef = useRef<string | null>(null);
+  const routeRequestInFlightKeyRef = useRef<string | null>(null);
   const mapPanelRef = useRef<HTMLDivElement | null>(null);
   const kakaoMapRef = useRef<any>(null);
   const routePolylineRef = useRef<any[]>([]);
@@ -271,17 +296,140 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   const mapSymptomToChiefComplaintCode = useCallback((symptomRaw: string | null | undefined) => {
     const symptom = (symptomRaw || "").toLowerCase();
     if (!symptom.trim()) return null;
+    if (symptom.includes("chest_pain")) return "chest_pain";
     if (symptom.includes("가슴") || symptom.includes("흉통") || symptom.includes("chest")) return "chest_pain";
-    if (symptom.includes("호흡") || symptom.includes("숨") || symptom.includes("resp")) return "dyspnea";
-    if (symptom.includes("신경") || symptom.includes("편마비") || symptom.includes("경련") || symptom.includes("stroke")) return "neuro";
-    if (symptom.includes("복통") || symptom.includes("소화") || symptom.includes("abdominal") || symptom.includes("배")) return "abdominal";
-    if (symptom.includes("출혈") || symptom.includes("bleed")) return "bleeding";
-    if (symptom.includes("의식") || symptom.includes("altered") || symptom.includes("syncope")) return "altered";
+    if (symptom.includes("호흡") || symptom.includes("숨") || symptom.includes("dyspnea") || symptom.includes("resp") || symptom.includes("shortness of breath")) return "dyspnea";
+    if (
+      symptom.includes("flank pain") ||
+      symptom.includes("renal colic") ||
+      symptom.includes("kidney stone") ||
+      symptom.includes("옆구리")
+    ) return "abdominal";
+    if (
+      symptom.includes("신경") ||
+      symptom.includes("편마비") ||
+      symptom.includes("마비") ||
+      symptom.includes("뇌졸중") ||
+      symptom.includes("경련") ||
+      symptom.includes("stroke") ||
+      symptom.includes("acute focal weakness") ||
+      symptom.includes("focal weakness") ||
+      symptom.includes("unilateral weakness") ||
+      symptom.includes("weakness on one side") ||
+      symptom.includes("neuro deficit") ||
+      symptom.includes("neurologic deficit") ||
+      symptom.includes("paralysis") ||
+      symptom.includes("hemiparesis")
+    ) return "neuro";
+    if (
+      symptom.includes("low back pain") ||
+      symptom.includes("lower back pain") ||
+      symptom.includes("back pain") ||
+      symptom.includes("lumbar pain") ||
+      symptom.includes("lumbago") ||
+      symptom.includes("back injury") ||
+      symptom.includes("허리") ||
+      symptom.includes("요통") ||
+      symptom.includes("등 통증")
+    ) return "trauma";
+    if (symptom.includes("복통") || symptom.includes("소화") || symptom.includes("abdominal") || symptom.includes("gi ") || symptom.includes("배")) return "abdominal";
+    if (symptom.includes("출혈") || symptom.includes("bleed") || symptom.includes("hematemesis") || symptom.includes("melena")) return "bleeding";
+    if (symptom.includes("의식") || symptom.includes("altered") || symptom.includes("syncope") || symptom.includes("mental change")) return "altered";
     if (symptom.includes("외상") || symptom.includes("trauma") || symptom.includes("사고") || symptom.includes("골절") || symptom.includes("화상")) return "trauma";
     if (symptom.includes("산부인") || symptom.includes("ob") || symptom.includes("preg")) return "obgyn";
     if (symptom.includes("소아") || symptom.includes("pediatric") || symptom.includes("아이")) return "pediatric";
     if (symptom.includes("정신") || symptom.includes("psy")) return "psychiatric";
     return null;
+  }, []);
+
+  const normalizePredictResult = useCallback((result: any): NormalizedKtasCase => {
+    const caseData = result?.case ?? result?.routingResponse?.case ?? result ?? {};
+    const ktasValue = caseData?.ktas ?? caseData?.ktas_level ?? caseData?.ktasLevel;
+    const complaintIdValue = caseData?.complaint_id ?? caseData?.complaintId;
+    const ktas = ktasValue != null && Number.isFinite(Number(ktasValue)) ? Number(ktasValue) : null;
+    const complaintId =
+      complaintIdValue != null && Number.isFinite(Number(complaintIdValue))
+        ? Number(complaintIdValue)
+        : null;
+
+    return {
+      ktas,
+      complaint_id: complaintId,
+      complaint_label: caseData?.complaint_label ?? caseData?.complaintLabel ?? null,
+      corrected_text: result?.corrected_text ?? result?.text ?? null,
+    };
+  }, []);
+
+  const buildKtasRoutePayload = useCallback((
+    coordinates?: { lat: number; lon: number } | null,
+    caseOverride?: NormalizedKtasCase | null,
+  ): KtasRoutePayload | null => {
+    const effectiveCase = caseOverride ?? pendingKtasCase;
+    const ktasLevel = Number(effectiveCase?.ktas ?? patientData.ktasLevel ?? routingResponse?.case?.ktas);
+    const caseComplaintText = effectiveCase?.complaint_label || effectiveCase?.corrected_text;
+    const mappedChiefComplaint =
+      mapSymptomToChiefComplaintCode(patientData.symptoms) ||
+      mapSymptomToChiefComplaintCode(caseComplaintText);
+    const caseComplaintId = effectiveCase?.complaint_id ?? routingResponse?.case?.complaint_id;
+    const chiefComplaintFromCase =
+      typeof caseComplaintId === "number"
+        ? COMPLAINT_ID_TO_CHIEF_COMPLAINT[caseComplaintId]
+        : null;
+    const chiefComplaint = mappedChiefComplaint || chiefComplaintFromCase;
+
+    const payload: KtasRoutePayload = {
+      ktas_level: ktasLevel,
+      chief_complaint: chiefComplaint || patientData.symptoms,
+      hospital_followup: patientData.existingHospital || undefined,
+      user_lat: coordinates?.lat,
+      user_lon: coordinates?.lon,
+      min_valid_hospitals: 3,
+    };
+
+    if (!Number.isFinite(payload.ktas_level) || payload.ktas_level < 1) {
+      console.error("[route/seoul] invalid ktas_level", payload);
+      return null;
+    }
+
+    if (!chiefComplaint) {
+      console.error("[route/seoul] invalid chief_complaint", {
+        payload,
+        symptoms: patientData.symptoms,
+        caseOverride,
+        routingCase: routingResponse?.case,
+      });
+      return null;
+    }
+
+    if (payload.user_lat == null || payload.user_lon == null) {
+      console.warn("[route/seoul] missing location; requesting base recommendations without nearest sorting", payload);
+    }
+
+    return payload;
+  }, [
+    mapSymptomToChiefComplaintCode,
+    patientData.existingHospital,
+    patientData.ktasLevel,
+    patientData.symptoms,
+    pendingKtasCase,
+    routingResponse?.case,
+  ]);
+
+  const requestRouteFromKTAS = useCallback(async (
+    payload: KtasRoutePayload,
+  ): Promise<RoutingCandidateResponse | null> => {
+    const requestKey = JSON.stringify(payload);
+    if (routeRequestInFlightKeyRef.current === requestKey) {
+      console.warn("[route/seoul] duplicate request skipped", payload);
+      return null;
+    }
+
+    routeRequestInFlightKeyRef.current = requestKey;
+    try {
+      return await routeFromKTAS(payload);
+    } finally {
+      routeRequestInFlightKeyRef.current = null;
+    }
   }, []);
 
   // KTAS Logic
@@ -326,49 +474,119 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     address: h.address,
   }), []);
 
+  const runRecommendRouteFromCase = useCallback(async (
+    caseOverride?: NormalizedKtasCase | null,
+    coordinates?: { lat: number; lon: number } | null,
+  ): Promise<RoutingCandidateResponse | null> => {
+    const payload = buildKtasRoutePayload(coordinates ?? userLocation, caseOverride ?? pendingKtasCase);
+    console.log("[recommend] route payload", payload);
+
+    if (!payload) {
+      return null;
+    }
+
+    const routeResult = await requestRouteFromKTAS(payload);
+    console.log("[recommend] route response", routeResult);
+
+    if (routeResult) {
+      setRoutingResponse(routeResult);
+      setHospitals(routeResult.hospitals.slice(0, 3).map(mapToHospital));
+    }
+
+    return routeResult;
+  }, [
+    buildKtasRoutePayload,
+    mapToHospital,
+    pendingKtasCase,
+    requestRouteFromKTAS,
+    userLocation,
+  ]);
+
+  const requestRecommendLocation = useCallback((): Promise<MapCoordinate | null> => {
+    if (userLocation) return Promise.resolve(userLocation);
+
+    if (!('geolocation' in navigator)) {
+      console.warn("[recommend] geolocation unavailable; route request skipped");
+      alert("현재 위치를 확인할 수 없어 병원 추천을 실행할 수 없습니다.");
+      return Promise.resolve(null);
+    }
+
+    setAwaitingLocation(true);
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const coordinates = {
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+          };
+          setUserLocation(coordinates);
+          setAwaitingLocation(false);
+          resolve(coordinates);
+        },
+        (err) => {
+          console.warn("[recommend] geolocation error; route request skipped", err);
+          setAwaitingLocation(false);
+          alert("현재 위치 권한이 필요합니다. 위치를 허용한 뒤 다시 시도해주세요.");
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      );
+    });
+  }, [userLocation]);
+
+  const handleRecommendHospitals = useCallback(async () => {
+    console.log("[recommend] button clicked");
+    const normalizedCase = pendingKtasCase ?? (
+      routingResponse ? normalizePredictResult(routingResponse) : null
+    );
+
+    if (!normalizedCase?.ktas && !patientData.ktasLevel) {
+      alert("KTAS 결과를 먼저 확인해주세요.");
+      return;
+    }
+
+    setView('list');
+    setHospitals([]);
+    setIsLoadingHospitals(true);
+    setLocationRequested(true);
+
+    try {
+      const coordinates = await requestRecommendLocation();
+      if (!coordinates) {
+        setHospitals([]);
+        return;
+      }
+
+      const base = await runRecommendRouteFromCase(normalizedCase, coordinates);
+      if (!base) return;
+
+      await refineRoutingWithNearest(
+        base,
+        coordinates.lat,
+        coordinates.lon,
+      );
+    } catch (err) {
+      console.error('[recommend] route failed', err);
+      setHospitals([]);
+      setRoutingResponse(null);
+    } finally {
+      setIsLoadingHospitals(false);
+      setAwaitingLocation(false);
+    }
+  }, [
+    normalizePredictResult,
+    patientData.ktasLevel,
+    pendingKtasCase,
+    requestRecommendLocation,
+    routingResponse,
+    runRecommendRouteFromCase,
+  ]);
+
   const selectedRouteHospital = hospitals.find((hospital) => hospital.id === routeHospitalId) ?? null;
 
   const handleRouteHospitalChange = useCallback((hospital: Hospital) => {
     setRouteHospitalId((prev) => (prev === hospital.id ? prev : hospital.id));
   }, []);
-
-  // Fetch backend recommendations (base)
-  const fetchBackendHospitals = useCallback(async (options?: {
-    deferRender?: boolean;
-    coordinates?: { lat: number; lon: number } | null;
-  }) => {
-    if (!patientData.ktasLevel || !patientData.symptoms.trim()) {
-      setHospitals([]);
-      setRoutingResponse(null);
-      return;
-    }
-
-    const coordinates = options?.coordinates ?? userLocation;
-
-    setIsLoadingHospitals(true);
-    try {
-      const cc = mapSymptomToChiefComplaintCode(patientData.symptoms);
-      const base = await routeFromKTAS({
-        ktas_level: patientData.ktasLevel,
-        chief_complaint: cc || patientData.symptoms,
-        hospital_followup: patientData.existingHospital || undefined,
-        user_lat: coordinates?.lat,
-        user_lon: coordinates?.lon,
-        min_valid_hospitals: 3,
-      });
-
-      setRoutingResponse(base);
-      if (!options?.deferRender) {
-        setHospitals(base.hospitals.slice(0, 3).map(mapToHospital));
-      }
-    } catch (err) {
-      console.error('Error fetching recommendations:', err);
-      setHospitals([]);
-      setRoutingResponse(null);
-    } finally {
-      setIsLoadingHospitals(false);
-    }
-  }, [mapSymptomToChiefComplaintCode, mapToHospital, patientData.existingHospital, patientData.ktasLevel, patientData.symptoms, userLocation]);
 
   const refineRoutingWithNearest = useCallback(async (
     baseResponse: RoutingCandidateResponse,
@@ -420,74 +638,12 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     }
   }, [routingResponse, mapToHospital]);
 
-  // Request geolocation when entering list view (best-effort). If granted, wait for nearest before rendering.
+  // List view never starts routing by itself; recommendations are user initiated.
   useEffect(() => {
-    if (view !== 'list' || locationRequested) return;
-    if (!('geolocation' in navigator)) {
-      setLocationRequested(true);
-      fetchBackendHospitals();
-      return;
+    if (view === 'list' && !locationRequested && !routingResponse?.hospitals?.length) {
+      console.log('[route/list] route/seoul skipped; waiting for recommend button');
     }
-    setLocationRequested(true);
-    setAwaitingLocation(true);
-    setIsLoadingHospitals(true);
-
-    // Permission prompt can hang indefinitely; fall back to base routing after the same
-    // window we give geolocation itself, so we do not discard a valid position too early.
-    locationFallbackTimeoutRef.current = window.setTimeout(async () => {
-      console.warn('Geolocation fallback timeout reached; fetching base recommendations without coordinates');
-      setAwaitingLocation(false);
-      await fetchBackendHospitals();
-    }, 15000);
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        clearLocationFallbackTimeout();
-        const currentCoordinates = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-        };
-        setUserLocation(currentCoordinates);
-        try {
-          const base = await routeFromKTAS({
-            ktas_level: patientData.ktasLevel ?? 0,
-            chief_complaint: mapSymptomToChiefComplaintCode(patientData.symptoms) || patientData.symptoms,
-            hospital_followup: patientData.existingHospital || undefined,
-            user_lat: currentCoordinates.lat,
-            user_lon: currentCoordinates.lon,
-            min_valid_hospitals: 3,
-          });
-
-          const nearest = await refineRoutingWithNearest(
-            base,
-            currentCoordinates.lat,
-            currentCoordinates.lon,
-          );
-          if (!nearest || !nearest.hospitals?.length) {
-            setRoutingResponse(base);
-            setHospitals(base.hospitals.slice(0, 3).map(mapToHospital));
-          }
-        } catch (err) {
-          console.warn('Geolocation fetch failed, falling back to base list', err);
-          await fetchBackendHospitals({ coordinates: currentCoordinates });
-        } finally {
-          setIsLoadingHospitals(false);
-          setAwaitingLocation(false);
-        }
-      },
-      async (err) => {
-        clearLocationFallbackTimeout();
-        console.warn('Geolocation error', err);
-        setAwaitingLocation(false);
-        await fetchBackendHospitals();
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
-
-    return () => {
-      clearLocationFallbackTimeout();
-    };
-  }, [fetchBackendHospitals, mapSymptomToChiefComplaintCode, mapToHospital, patientData.existingHospital, patientData.ktasLevel, patientData.symptoms, view, locationRequested]);
+  }, [locationRequested, routingResponse?.hospitals?.length, view]);
 
 // Real-time Subscription for Transfer Request
   useEffect(() => {
@@ -533,7 +689,11 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
   };
 
   const applyBackendResult = useCallback((result: RoutingCandidateResponse) => {
-    setRoutingResponse(result);
+    const normalizedCase = normalizePredictResult(result);
+    console.log("[flow] normalized case", normalizedCase);
+    setPendingKtasCase(normalizedCase);
+    setRoutingResponse(null);
+    setHospitals([]);
     const vitals = result.stt_vitals || {};
     const avpu = (vitals as any).avpu || (vitals as any).AVPU;
     const rr = (vitals as any).rr ?? (vitals as any).RR;
@@ -542,27 +702,29 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     const hr = (vitals as any).hr ?? (vitals as any).HR;
     const spo2 = (vitals as any).spo2 ?? (vitals as any).SpO2 ?? (vitals as any).SPO2;
     const bt = (vitals as any).bt ?? (vitals as any).BT;
-    setPatientData((prev) => ({
-      ...prev,
-      ktasLevel: result.case?.ktas ?? prev.ktasLevel,
-      symptoms: result.case?.complaint_label ?? prev.symptoms,
-      consciousness: avpu || prev.consciousness,
-      respiration: rr != null ? String(rr) : prev.respiration,
-      bloodPressure:
-        bpSys != null && bpDia != null
-          ? `${bpSys}/${bpDia}`
-          : prev.bloodPressure,
-      pulse: hr != null ? String(hr) : prev.pulse,
-      oxygenSaturation: spo2 != null ? String(spo2) : prev.oxygenSaturation,
-      temperature: bt != null ? String(bt) : prev.temperature,
-    }));
+    setPatientData((prev) => {
+      const next = {
+        ...prev,
+        ktasLevel: result.case?.ktas ?? prev.ktasLevel,
+        symptoms: result.case?.complaint_label ?? prev.symptoms,
+        consciousness: avpu || prev.consciousness,
+        respiration: rr != null ? String(rr) : prev.respiration,
+        bloodPressure:
+          bpSys != null && bpDia != null
+            ? `${bpSys}/${bpDia}`
+            : prev.bloodPressure,
+        pulse: hr != null ? String(hr) : prev.pulse,
+        oxygenSaturation: spo2 != null ? String(spo2) : prev.oxygenSaturation,
+        temperature: bt != null ? String(bt) : prev.temperature,
+      };
+      console.log("[flow] final patientData", next);
+      return next;
+    });
     if (result.case?.ktas != null) {
       setKtasLocked(true);
     }
-    if (result.hospitals?.length) {
-      setHospitals(result.hospitals.slice(0, 3).map(mapToHospital));
-    }
-  }, [mapToHospital]);
+    console.log("[flow] saved case; waiting for recommend button");
+  }, [normalizePredictResult]);
 
   const handleVoiceInput = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -573,38 +735,96 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        audioBitsPerSecond: 128000,
+      });
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
+        console.log("[audio] dataavailable size:", e.data?.size);
+        console.log("[audio] dataavailable type:", e.data?.type);
+
+        if (e.data && e.data.size > 0) {
           mediaChunksRef.current.push(e.data);
         }
       };
 
       recorder.onstop = async () => {
         setIsListening(false);
-        const blob = new Blob(mediaChunksRef.current, { type: "audio/webm" });
+        const recordingDuration =
+          recordingStartedAtRef.current != null
+            ? Date.now() - recordingStartedAtRef.current
+            : 0;
+        recordingStartedAtRef.current = null;
+        const chunkSizes = mediaChunksRef.current.map((chunk) => chunk.size);
+        const blob = new Blob(mediaChunksRef.current, { type: mimeType });
+        const durationSeconds = Math.max(recordingDuration / 1000, 1);
+        const bytesPerSecond = blob.size / durationSeconds;
+
         stream.getTracks().forEach((t) => t.stop());
 
         setIsProcessingVoice(true);
         try {
+          console.log("[audio] chunk count:", mediaChunksRef.current.length);
+          console.log("[audio] chunk sizes:", chunkSizes);
+          console.log("[audio] blob size:", blob.size);
+          console.log("[audio] final blob size:", blob.size);
+          console.log("[audio] final blob type:", blob.type);
+          console.log("[audio] blob type:", blob.type);
+          console.log("[audio] recording duration:", recordingDuration);
+          console.log("[audio] bytes per second:", bytesPerSecond);
+
+          if (import.meta.env.DEV) {
+            const previewUrl = URL.createObjectURL(blob);
+            console.log("[audio] preview url:", previewUrl);
+          }
+
+          if (
+            blob.size < MIN_AUDIO_BLOB_BYTES ||
+            recordingDuration < MIN_RECORDING_MS ||
+            bytesPerSecond < MIN_AUDIO_BYTES_PER_SECOND
+          ) {
+            console.warn("[audio] suspiciously small recording; skip STT", {
+              size: blob.size,
+              durationMs: recordingDuration,
+              bytesPerSecond,
+              chunkCount: mediaChunksRef.current.length,
+              chunkSizes,
+            });
+            throw new Error("음성이 제대로 녹음되지 않았습니다. 마이크 입력을 확인하고 다시 녹음해주세요.");
+          }
+
+          const file = new File([blob], "recording.webm", { type: blob.type || "audio/webm" });
+          console.log("[audio] form data file:", file.name, file.type, file.size);
+
           const formData = new FormData();
-          formData.append("audio", blob, "recording.webm");
+          formData.append("audio", file);
 
           const result = await predictAudio(formData);
+          console.log("[flow:voice] predict-audio response", result);
+          console.log("[flow:voice] case", result?.case);
+          console.log("[flow:voice] ktas", result?.case?.ktas);
+          console.log("[flow:voice] complaint_id", result?.case?.complaint_id);
+          console.log("[flow:voice] complaint_label", result?.case?.complaint_label);
           applyBackendResult(result);
+          console.log("[flow:voice] normalized case", normalizePredictResult(result));
+          console.log("[flow:voice] saved case; waiting for recommend button");
           setView("review");
         } catch (err) {
           console.error("음성 전송 실패:", err);
-          alert("음성 인식에 실패했습니다. 다시 시도해 주세요.");
+          alert(err instanceof Error ? err.message : "음성 인식에 실패했습니다. 다시 시도해 주세요.");
         } finally {
           setIsProcessingVoice(false);
         }
         recordTimeoutRef.current = null;
       };
 
-      recorder.start();
+      recordingStartedAtRef.current = Date.now();
+      recorder.start(1000);
       setIsListening(true);
 
       recordTimeoutRef.current = window.setTimeout(() => {
@@ -799,11 +1019,13 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
     setView('input');
     setKtasLocked(false);
     setRoutingResponse(null);
+    setPendingKtasCase(null);
     setHospitals([]);
     setUserLocation(null);
     setLocationRequested(false);
     setAwaitingLocation(false);
     lastNearestRequestKeyRef.current = null;
+    routeRequestInFlightKeyRef.current = null;
     clearLocationFallbackTimeout();
     setPatientInfo({
       name: '',
@@ -1597,8 +1819,12 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                             ? ` 산소포화도 ${patientData.oxygenSaturation.trim()}%.`
                             : '';
                           const report = `환자 보고: ${patientInfo.age || ''}세 ${genderText} 환자. 이름: ${patientInfo.name || '정보 없음'}. 생년월일: ${patientInfo.birthdate || '정보 없음'}. 주증상: ${patientData.symptoms}. 의식: ${patientData.consciousness}. 호흡수: ${patientData.respiration || '정보 없음'}.${oxygenSaturationText} 맥박: ${patientData.pulse || '정보 없음'}. 혈압: ${patientData.bloodPressure || '정보 없음'}. 체온: ${patientData.temperature || '정보 없음'}. 평소 병원: ${patientData.existingHospital || '정보 없음'}.`;
+                          console.log("[flow:text] predict request payload", { text: report });
                           const result = await predictText(report);
+                          console.log("[flow:text] predict response", result);
                           applyBackendResult(result);
+                          console.log("[flow:text] normalized case", normalizePredictResult(result));
+                          console.log("[flow:text] saved case; waiting for recommend button");
                         } catch (err) {
                           console.error("텍스트 기반 KTAS 호출 실패:", err);
                           alert("텍스트로 KTAS 계산에 실패했습니다. 다시 시도해 주세요.");
@@ -1702,7 +1928,7 @@ export const ParamedicDashboard: React.FC<ParamedicDashboardProps> = ({ userName
                 <ModernButton
                   variant="primary"
                   size="full"
-                  onClick={() => setView('list')}
+                  onClick={handleRecommendHospitals}
                   className="flex-1"
                 >
                   병원 추천 보기
